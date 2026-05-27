@@ -1,0 +1,1 @@
+Hi everyone! scety is my own project written in Rust and inspired by nginx. I plan to continue developing it and hopefully eventually make it production-ready. 

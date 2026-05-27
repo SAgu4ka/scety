@@ -1,0 +1,9 @@
+[package]
+name = "scety"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9.8"

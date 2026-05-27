@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="page-title">Error // Engine</title>
+    <style>
+        :root {
+            --bg: #080b10;
+            --card-bg: #0e131f;
+            --border: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #64748b;
+            --accent: #ef4444; 
+            --glow: rgba(239, 68, 68, 0.1);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 1rem;
+        }
+
+        body::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image: radial-gradient(circle at 50% 50%, var(--glow) 0%, transparent 70%);
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .error-container {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 500px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 2.5rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+        }
+
+        .error-code-bg {
+            font-family: ui-monospace, SFMono-Regular, monospace;
+            font-size: 7rem;
+            font-weight: 800;
+            line-height: 1;
+            background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 100%);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            position: absolute;
+            top: 1rem;
+            left: 0;
+            right: 0;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.35rem 0.75rem;
+            border-radius: 9999px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            font-family: ui-monospace, monospace;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent);
+            margin-bottom: 1.5rem;
+        }
+
+        .badge-dot {
+            width: 6px;
+            height: 6px;
+            background: var(--accent);
+            border-radius: 50%;
+        }
+
+        h1 {
+            font-size: 1.75rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.75rem;
+        }
+
+        .description {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.6;
+            margin-bottom: 2.5rem;
+        }
+
+        .details-panel {
+            background: rgba(0, 0, 0, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.02);
+            border-top: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: left;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.75rem;
+        }
+
+        .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.25rem 0;
+            color: #94a3b8;
+        }
+
+        .row .label { color: var(--text-muted); }
+        .row .value { color: #cbd5e1; }
+    </style>
+</head>
+<body>
+
+    <div class="error-container">
+        <div class="error-code-bg" id="err-code-bg">500</div>
+        
+        <div class="badge">
+            <span class="badge-dot"></span>
+            <span id="err-badge">Server Error</span>
+        </div>
+
+        <h1 id="err-title">Http Status {{CODE}}</h1>
+        <p class="description" id="err-desc">The server encountered an error and was unable to complete your request.</p>
+
+        <div class="details-panel">
+            <div class="row">
+                <span class="label">Engine:</span>
+                <span class="value">{{ENGINE}}</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            const params = new URLSearchParams(window.location.search);
+            
+            let code = params.get('code') || "{{CODE}}";
+            let desc = params.get('msg') || "{{MESSAGE}}";
+
+            if (code.startsWith('{{')) code = "500";
+            if (desc.startsWith('{{')) desc = "Internal Server Error. No further details provided.";
+
+            let accentColor = '#ef4444';
+            let glowColor = 'rgba(239, 68, 68, 0.1)';
+            let badgeText = 'Server Error';
+
+            if (code.startsWith('4')) {
+                accentColor = '#f59e0b';
+                glowColor = 'rgba(245, 158, 11, 0.08)';
+                badgeText = 'Client Error';
+            }
+
+            document.documentElement.style.setProperty('--accent', accentColor);
+            document.documentElement.style.setProperty('--glow', glowColor);
+
+            document.getElementById('page-title').textContent = `${code} // Engine`;
+            document.getElementById('err-code-bg').textContent = code;
+            document.getElementById('err-title').textContent = `Http Status ${code}`;
+            document.getElementById('err-desc').textContent = desc;
+            document.getElementById('err-badge').textContent = badgeText;
+        })();
+    </script>
+</body>
+</html>

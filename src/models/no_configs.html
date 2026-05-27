@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Engine Active | Awaiting Blueprint</title>
+    <style>
+        :root {
+            --bg: #0b0e14;
+            --card-bg: #11151c;
+            --border: #21262e;
+            --text-main: #e2e8f0;
+            --text-muted: #6272a4;
+            --accent: #ff79c6;
+            --glow: rgba(255, 121, 198, 0.15);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image: linear-gradient(rgba(33, 38, 46, 0.1) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(33, 38, 46, 0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+            z-index: 0;
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 480px;
+            padding: 2.5rem;
+            border-radius: 12px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4), 0 0 50px var(--glow);
+            backdrop-filter: blur(4px);
+            transition: transform 0.3s ease;
+        }
+
+        .status-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--accent);
+            animation: pulse 2s infinite;
+        }
+
+        .status-text {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--text-muted);
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            letter-spacing: -0.5px;
+        }
+
+        .quote {
+            color: #a9b2c3;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            margin-bottom: 2rem;
+            font-style: italic;
+            border-left: 2px solid var(--border);
+            padding-left: 1rem;
+        }
+
+        .telemetry {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.75rem 1rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-align: left;
+        }
+
+        .telemetry-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.25rem;
+        }
+        .telemetry-row:last-child { margin-bottom: 0; }
+        
+        .val { color: var(--text-main); }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 121, 198, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(255, 121, 198, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 121, 198, 0); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="status-header">
+            <div class="pulse-dot"></div>
+            <div class="status-text">Core :: Idle</div>
+        </div>
+        
+        <h1>Void Detected</h1>
+        
+        <div class="quote">
+            «It seems to me that first we need to patch up the holes in this emptiness...»
+        </div>
+
+        <div class="telemetry">
+            <div class="telemetry-row">
+                <span>Engine:</span>
+                <span class="val">scety</span>
+            </div>
+            <div class="telemetry-row">
+                <span>Host:</span>
+                <span class="val" id="srv-host">loading...</span>
+            </div>
+            <div class="telemetry-row">
+                <span>Status:</span>
+                <span class="val" style="color: #50fa7b;">Awaiting Config</span>
+            </div>
+            <div class="telemetry-row">
+                <span>Local Time:</span>
+                <span class="val" id="srv-time">--:--:--</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('srv-host').textContent = window.location.host || 'localhost';
+
+        function updateTime() {
+            const now = new Date();
+            const timeStr = now.toTimeString().split(' ')[0];
+            document.getElementById('srv-time').textContent = timeStr;
+        }
+        updateTime();
+        setInterval(updateTime, 1000);
+
+        document.querySelector('.container').style.opacity = 0;
+        document.querySelector('.container').style.transform = 'translateY(10px)';
+        window.addEventListener('DOMContentLoaded', () => {
+            const c = document.querySelector('.container');
+            c.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+            c.style.opacity = 1;
+            c.style.transform = 'translateY(0)';
+        });
+    </script>
+</body>
+</html>
