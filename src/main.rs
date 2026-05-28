@@ -4,6 +4,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::http::error_pages::send;
 
 mod http;
+mod core;
+
+const NO_CONFIG_HTML: &str = include_str!("./models/no_configs.html");
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             eprintln!("Error sending HTML error response: {}", e);
                         }
                     } else if path == "/" {
-                        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 26\r\n\r\nWelcome to scety!";
+                        let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}", NO_CONFIG_HTML.len(), NO_CONFIG_HTML);
                         if let Err(e) = socket.write_all(response.as_bytes()).await {
                             eprintln!("Error in writing in socket: {}", e);
                         }
