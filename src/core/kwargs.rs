@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::borrow::Cow;
+
+#[derive(Debug)]
 pub struct Kwargs<'a> {
     map: HashMap<&'a str, Cow<'a, str>>,
 }

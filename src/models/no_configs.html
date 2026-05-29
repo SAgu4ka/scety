@@ -137,11 +137,7 @@
         <div class="telemetry">
             <div class="telemetry-row">
                 <span>Engine:</span>
-                <span class="val">scety</span>
-            </div>
-            <div class="telemetry-row">
-                <span>Host:</span>
-                <span class="val" id="srv-host">loading...</span>
+                <span class="val">{{ENGINE}}</span>
             </div>
             <div class="telemetry-row">
                 <span>Status:</span>
@@ -155,8 +151,6 @@
     </div>
 
     <script>
-        document.getElementById('srv-host').textContent = window.location.host || 'localhost';
-
         function updateTime() {
             const now = new Date();
             const timeStr = now.toTimeString().split(' ')[0];
