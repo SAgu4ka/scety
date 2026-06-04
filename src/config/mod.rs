@@ -1,2 +1,2 @@
-pub mod get_servises_config;
+pub mod get_services_config;
 pub mod settings;

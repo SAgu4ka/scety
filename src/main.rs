@@ -1,6 +1,6 @@
 use tokio::net::TcpListener;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use crate::config::get_servises_config::get_all_configs;
+use crate::config::get_services_config::get_all_configs;
 use crate::config::settings::{CONFIG_PATH, EXPOSE_VERSION};
 use crate::network::global_router::start_listen;
 
@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>>{
 
                 match socket.read(&mut buf).await {
                     Ok(n) if n == 0 => return,
-                    Ok(n) => {
+                    Ok(_) => {
                         if let Err(e) = socket.write_all(response.as_bytes()).await {
                             eprintln!("Error writing to socket: {}", e);
                         }

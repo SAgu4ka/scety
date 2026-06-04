@@ -8,6 +8,7 @@ use std::fs;
 pub struct ClientConfig {
     pub listen_port: u16,
     pub target_port: u16,
+    pub host: String,
 }
 
 fn get_all_config_paths()  -> Vec<PathBuf>{
