@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use chrono::Utc;
 use crate::http::generate_http_response::get_status_message;
 use std::fmt::Write;
+use tracing::debug;
 
 const ENGINE_NAME: &str = env!("CARGO_PKG_NAME");
 const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -27,6 +28,7 @@ impl<'a> HttpResponse<'a> {
 
     pub fn with_content(mut self, content_type: &str, body: impl Into<Cow<'a, str>>) -> Self {
         let body_cow = body.into();
+        debug!(content_len=%body_cow.len(), "Adding Content to an HTTP Response");
 
         self.headers.push(("Content-Type".to_string(), content_type.to_string()));
         self.headers.push(("Content-Length".to_string(), body_cow.len().to_string()));
@@ -36,6 +38,7 @@ impl<'a> HttpResponse<'a> {
     }
 
     pub fn to_http_string(&self) -> String {
+        debug!("Converting an HTTP response to a string...");
         let body_len = self.body.as_ref().map_or(0, |b| b.len());
         let mut response_string = String::with_capacity(1024 + body_len);
 
@@ -63,7 +66,7 @@ impl<'a> HttpResponse<'a> {
         if let Some(ref body) = self.body {
             response_string.push_str(body);
         }
-
+        debug!(headers=%self.headers.len()+3, "Successfully converting an HTTP response to a string");
         response_string
     }
 }
