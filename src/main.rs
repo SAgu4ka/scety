@@ -1,7 +1,7 @@
 use clap::Parser;
 use cli::args::{Cli, Commands};
-
-use crate::cli::commands::run::run;
+use tracing::{error};
+use crate::cli::commands::{run::run, stop::stop, status::status };
 
 mod http;
 mod core;
@@ -22,9 +22,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>>{
     let cli = Cli::parse();
     
     match cli.command {
-        Commands::Run => { run().await?; }
-        Commands::Stop => {  }
-        Commands::Reload => {  }
+        Commands::Run => { 
+            if let Err(e) = run().await{
+                error!("{}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Stop => { 
+            if let Err(e) = stop().await {
+                error!("{}", e);
+                std::process::exit(1);
+            }
+        }   
+        Commands::Reload => { status().await? }
         Commands::Status => {  }
         Commands::Check => {  }
         Commands::Uninstall => {  }
