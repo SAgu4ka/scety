@@ -41,7 +41,7 @@ pub async fn start_fallback_server()  -> Result<(), Box<dyn std::error::Error>> 
                     let mut buf = [0; 1024];
                     
                     match socket.read(&mut buf).await {
-                        Ok(n) if n == 0 => return,
+                        Ok(0) => (),
                         Ok(_) => {
                             if let Err(e) = socket.write_all(response.as_bytes()).await {
                                 error!(error=%e, "Error writing to socket");

@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use walkdir::WalkDir;
 use std::path::PathBuf;
 use crate::config::settings::SERVICES_CONFIGS_PATH;
@@ -47,7 +49,7 @@ fn get_all_config_paths()  -> Vec<PathBuf>{
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "toml"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
         .map(|e| e.path().to_path_buf())
         .collect()
 }
@@ -103,15 +105,12 @@ pub fn validate_config(config: &ClientConfig) -> Result<(), String> {
             }
         }
         for key in config.upstreams.keys() {
-            if key.starts_with("upstream_") {
-                let port_str = &key["upstream_".len()..];
-                if let Ok(port) = port_str.parse::<u16>() {
-                    if !ports.contains(&port) {
-                        return Err(format!(
-                            "[{}] found, but port {} is not in listens_port={:?}. Maybe listens_port should include {}?",
-                            key, port, ports, port
-                        ));
-                    }
+            if let Some(port_str) = key.strip_prefix("upstream_") {
+                if let Ok(port) = port_str.parse::<u16>() && !ports.contains(&port) {
+                    return Err(format!(
+                        "[{}] found, but port {} is not in listens_port={:?}. Maybe listens_port should include {}?",
+                        key, port, ports, port
+                    ));
                 }
             }
         }
