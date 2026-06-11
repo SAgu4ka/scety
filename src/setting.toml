@@ -2,4 +2,4 @@
 expose_version = true
 
 [paths]
-servises_configs_path = "/etc/scety/servises"
+services_configs_path = "/etc/scety/servises"

@@ -1,7 +1,7 @@
 use clap::Parser;
 use cli::args::{Cli, Commands};
 use tracing::{error};
-use crate::cli::commands::{run::run, stop::stop, status::status, reload::reload, uninstall::uninstall, check::check };
+use crate::cli::commands::{check::check, install::install, reload::reload, run::run, status::status, stop::stop, uninstall::uninstall };
 
 mod http;
 mod core;
@@ -39,6 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>>{
         Commands::Status => run_command(status).await,
         Commands::Check => run_command(check).await,
         Commands::Uninstall => run_command(uninstall).await,
+        Commands::Install => run_command(install).await,
     }
 
     Ok(()) 

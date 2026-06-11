@@ -4,3 +4,4 @@ pub mod status;
 pub mod reload;
 pub mod uninstall;
 pub mod check;
+pub mod install;

@@ -1,6 +1,6 @@
 use walkdir::WalkDir;
 use std::path::PathBuf;
-use crate::config::settings::SERVISES_CONFIGS_PATH;
+use crate::config::settings::SERVICES_CONFIGS_PATH;
 use serde::Deserialize;
 use std::fs;
 use tracing::{info, debug, error};
@@ -43,7 +43,7 @@ pub struct HeadersConfig {
 
 fn get_all_config_paths()  -> Vec<PathBuf>{
     debug!("Starting searching for configuration files...");
-    WalkDir::new(SERVISES_CONFIGS_PATH)
+    WalkDir::new(SERVICES_CONFIGS_PATH)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
