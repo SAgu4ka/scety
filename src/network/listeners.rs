@@ -73,8 +73,8 @@ async fn handle_client(
                             .unwrap_or(&req_host)
                             .to_string();
 
-                        if let Some(target_config) = configs.iter().find(|cfg| cfg.host == clean_host) {
-                            return Ok(Some((buf, read_bytes, target_config.target_port)));
+                        if let Some(target_config) = configs.iter().find(|cfg| cfg.host.as_deref() == Some(&clean_host)) {
+                            return Ok(Some((buf, read_bytes, target_config.upstream.as_ref().and_then(|u| u.port))));
                         }
                     }
                     return Ok(None);
@@ -111,7 +111,7 @@ async fn handle_client(
         }
         Ok(Ok(Some((buf, read_bytes, target_port)))) => {
 
-            let target_addr = format!("127.0.0.1:{}", target_port);
+            let target_addr = format!("127.0.0.1:{:?}", target_port);
 
             match timeout(Duration::from_secs(30), TcpStream::connect(&target_addr)).await {
                 Err(e) => {

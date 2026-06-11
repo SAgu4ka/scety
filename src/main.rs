@@ -1,13 +1,24 @@
 use clap::Parser;
 use cli::args::{Cli, Commands};
 use tracing::{error};
-use crate::cli::commands::{run::run, stop::stop, status::status };
+use crate::cli::commands::{run::run, stop::stop, status::status, reload::reload, uninstall::uninstall, check::check };
 
 mod http;
 mod core;
 mod config;
 mod network;
 mod cli;
+
+async fn run_command<F, Fut>(f: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error>>>,
+{
+    if let Err(e) = f().await {
+        error!("{}", e);
+        std::process::exit(1);
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>>{
@@ -22,22 +33,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>>{
     let cli = Cli::parse();
     
     match cli.command {
-        Commands::Run => { 
-            if let Err(e) = run().await{
-                error!("{}", e);
-                std::process::exit(1);
-            }
-        }
-        Commands::Stop => { 
-            if let Err(e) = stop().await {
-                error!("{}", e);
-                std::process::exit(1);
-            }
-        }   
-        Commands::Reload => { status().await? }
-        Commands::Status => {  }
-        Commands::Check => {  }
-        Commands::Uninstall => {  }
+        Commands::Run => run_command(run).await,
+        Commands::Stop => run_command(stop).await,
+        Commands::Reload => run_command(reload).await,
+        Commands::Status => run_command(status).await,
+        Commands::Check => run_command(check).await,
+        Commands::Uninstall => run_command(uninstall).await,
     }
 
     Ok(()) 

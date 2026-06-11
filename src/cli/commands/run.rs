@@ -1,7 +1,7 @@
 use tokio::net::TcpListener;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::config::get_services_config::get_all_configs;
-use crate::config::settings::{CONFIG_PATH, EXPOSE_VERSION};
+use crate::config::settings::{SERVISES_CONFIGS_PATH, EXPOSE_VERSION};
 use crate::network::global_router::start_listen;
 use tracing::{warn, error, info, debug};
 use std::sync::Arc;
@@ -15,7 +15,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     if is_systemd {
         info!("Start scety...");
-        debug!(config_path=%CONFIG_PATH, expose_version=%EXPOSE_VERSION, "Starting arguments");
+        debug!(config_path=%SERVISES_CONFIGS_PATH, expose_version=%EXPOSE_VERSION, "Starting arguments");
         debug!("Start load configs...");
         let all_configs = get_all_configs();
         if all_configs.is_empty() {
@@ -27,7 +27,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             let bind_target = "0.0.0.0:80";
             let listener = TcpListener::bind(&bind_target).await?;
-            warn!(address=%bind_target, config_path=%CONFIG_PATH, "Configs not found, starting fallback server");
+            warn!(address=%bind_target, config_path=%SERVISES_CONFIGS_PATH, "Configs not found, starting fallback server");
 
             let html_body = NO_CONFIG_HTML.replace("{{ENGINE}}", &server_header);
             
