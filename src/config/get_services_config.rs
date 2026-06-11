@@ -105,13 +105,13 @@ pub fn validate_config(config: &ClientConfig) -> Result<(), String> {
             }
         }
         for key in config.upstreams.keys() {
-            if let Some(port_str) = key.strip_prefix("upstream_") {
-                if let Ok(port) = port_str.parse::<u16>() && !ports.contains(&port) {
-                    return Err(format!(
-                        "[{}] found, but port {} is not in listens_port={:?}. Maybe listens_port should include {}?",
-                        key, port, ports, port
-                    ));
-                }
+            if let Some(port_str) = key.strip_prefix("upstream_")
+                && let Ok(port) = port_str.parse::<u16>()
+                && !ports.contains(&port) {
+                return Err(format!(
+                    "[{}] found, but port {} is not in listens_port={:?}. Maybe listens_port should include {}?",
+                    key, port, ports, port
+                ));
             }
         }
     } else if config.upstream.is_none() {
