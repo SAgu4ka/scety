@@ -131,7 +131,6 @@ async fn handle_client(
             Ok(())
         }
         Ok(Ok(Some((buf, read_bytes, target_port)))) => {
-
             let target_addr = match target_port {
                 Some(port) => format!("127.0.0.1:{}", port),
                 None => {
