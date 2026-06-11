@@ -29,7 +29,7 @@ pub fn get_status_message(code: u16) -> &'static str {
         .unwrap_or("Something went wrong.")
 }
 
-pub async fn generate_text_response(
+pub fn generate_text_response(
     code: u16,
     connection: &str,
     with_content: bool,

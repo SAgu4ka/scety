@@ -131,7 +131,14 @@ async fn handle_client(
             Ok(())
         }
         Ok(Ok(Some((buf, read_bytes, target_port)))) => {
-            let target_addr = format!("127.0.0.1:{:?}", target_port);
+
+            let target_addr = match target_port {
+                Some(port) => format!("127.0.0.1:{}", port),
+                None => {
+                    send(&mut client_socket, 502, expose_version).await?;
+                    return Ok(());
+                }
+            };
 
             match timeout(Duration::from_secs(30), TcpStream::connect(&target_addr)).await {
                 Err(e) => {

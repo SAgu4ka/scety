@@ -34,8 +34,7 @@ pub async fn send(stream: &mut TcpStream, code: u16, expose_version: bool) -> st
         Some("text/html; charset=utf-8"),
         Some(&html_content),
         expose_version,
-    )
-    .await;
+    );
 
     stream.write_all(response.as_bytes()).await?;
     stream.flush().await?;
