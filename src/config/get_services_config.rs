@@ -1,12 +1,12 @@
 #![allow(unused)]
 
-use walkdir::WalkDir;
-use std::path::PathBuf;
 use crate::config::settings::SERVICES_CONFIGS_PATH;
 use serde::Deserialize;
-use std::fs;
-use tracing::{info, debug, error};
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use tracing::{debug, error, info};
+use walkdir::WalkDir;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ClientConfig {
@@ -43,7 +43,7 @@ pub struct HeadersConfig {
     pub response: Option<HashMap<String, String>>,
 }
 
-fn get_all_config_paths()  -> Vec<PathBuf>{
+fn get_all_config_paths() -> Vec<PathBuf> {
     debug!("Starting searching for configuration files...");
     WalkDir::new(SERVICES_CONFIGS_PATH)
         .into_iter()
@@ -57,18 +57,26 @@ fn get_all_config_paths()  -> Vec<PathBuf>{
 pub fn get_all_configs() -> Vec<ClientConfig> {
     let mut vec_confs = Vec::new();
     let all_configs = get_all_config_paths();
-    info!("{} files found in the configuration directory. Running validation check...", all_configs.len());
+    info!(
+        "{} files found in the configuration directory. Running validation check...",
+        all_configs.len()
+    );
 
     for conf in all_configs.iter() {
-
         let content = match fs::read_to_string(conf) {
             Ok(c) => c,
-            Err(_) => { error!(file=%conf.to_string_lossy(), "Failed to read configuration file"); continue; }
+            Err(_) => {
+                error!(file=%conf.to_string_lossy(), "Failed to read configuration file");
+                continue;
+            }
         };
 
         let config: ClientConfig = match toml::from_str(&content) {
             Ok(c) => c,
-            Err(e) => { error!(error=%e, file=%conf.to_string_lossy(), "Error parsing configuration file"); continue; }
+            Err(e) => {
+                error!(error=%e, file=%conf.to_string_lossy(), "Error parsing configuration file");
+                continue;
+            }
         };
 
         if let Err(e) = validate_config(&config) {
@@ -91,12 +99,15 @@ pub fn validate_config(config: &ClientConfig) -> Result<(), String> {
     }
 
     match (&config.listen_port, &config.listens_port) {
-        (None, None) => return Err("Either 'listen_port' or 'listens_port' must be specified".to_string()),
-        (Some(_), Some(_)) => return Err("'listen_port' and 'listens_port' are mutually exclusive".to_string()),
+        (None, None) => {
+            return Err("Either 'listen_port' or 'listens_port' must be specified".to_string());
+        }
+        (Some(_), Some(_)) => {
+            return Err("'listen_port' and 'listens_port' are mutually exclusive".to_string());
+        }
         _ => {}
     }
 
-    
     if let Some(ports) = &config.listens_port {
         for port in ports {
             let key = format!("upstream_{}", port);
@@ -107,7 +118,8 @@ pub fn validate_config(config: &ClientConfig) -> Result<(), String> {
         for key in config.upstreams.keys() {
             if let Some(port_str) = key.strip_prefix("upstream_")
                 && let Ok(port) = port_str.parse::<u16>()
-                && !ports.contains(&port) {
+                && !ports.contains(&port)
+            {
                 return Err(format!(
                     "[{}] found, but port {} is not in listens_port={:?}. Maybe listens_port should include {}?",
                     key, port, ports, port
@@ -120,9 +132,13 @@ pub fn validate_config(config: &ClientConfig) -> Result<(), String> {
 
     let check_upstream = |u: &UpstreamConfig| -> Result<(), String> {
         match (&u.port, &u.ports) {
-            (None, None) => Err("Either 'port' or 'ports' must be specified in [upstream]".to_string()),
-            (Some(_), Some(_)) => Err("'port' and 'ports' are mutually exclusive in [upstream]".to_string()),
-            _ => Ok(())
+            (None, None) => {
+                Err("Either 'port' or 'ports' must be specified in [upstream]".to_string())
+            }
+            (Some(_), Some(_)) => {
+                Err("'port' and 'ports' are mutually exclusive in [upstream]".to_string())
+            }
+            _ => Ok(()),
         }
     };
 

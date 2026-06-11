@@ -1,7 +1,7 @@
+use crate::core::response::HttpResponse;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use serde::Deserialize;
-use crate::core::response::HttpResponse;
 
 const TOML_SOURCE: &str = include_str!("../models/http_code_table/default.toml");
 
@@ -14,14 +14,13 @@ static STATUS_MAP: OnceLock<HashMap<u16, String>> = OnceLock::new();
 
 pub fn get_status_message(code: u16) -> &'static str {
     let map = STATUS_MAP.get_or_init(|| {
-        let registry: RawStatusRegistry = toml::from_str(TOML_SOURCE)
-            .expect("Critical error: default.toml is invalid!");
-        
-        registry.statuses
+        let registry: RawStatusRegistry =
+            toml::from_str(TOML_SOURCE).expect("Critical error: default.toml is invalid!");
+
+        registry
+            .statuses
             .into_iter()
-            .filter_map(|(k, v)| {
-                k.parse::<u16>().ok().map(|num| (num, v))
-            })
+            .filter_map(|(k, v)| k.parse::<u16>().ok().map(|num| (num, v)))
             .collect()
     });
 
@@ -38,7 +37,6 @@ pub async fn generate_text_response(
     content: Option<&str>,
     expose_version: bool,
 ) -> String {
-
     let mut response = HttpResponse::new(code, connection, expose_version);
 
     if with_content {
@@ -50,4 +48,3 @@ pub async fn generate_text_response(
 
     response.to_http_string()
 }
-

@@ -1,14 +1,14 @@
-use tokio::net::TcpListener;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{warn, error};
+use crate::config::settings::{EXPOSE_VERSION, SERVICES_CONFIGS_PATH};
 use std::sync::Arc;
-use crate::config::settings::{SERVICES_CONFIGS_PATH, EXPOSE_VERSION};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tracing::{error, warn};
 
 const NO_CONFIG_HTML: &str = include_str!("../models/no_configs.html");
 const ENGINE: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 const ENGINE_NAME: &str = env!("CARGO_PKG_NAME");
 
-pub async fn start_fallback_server()  -> Result<(), Box<dyn std::error::Error>> {
+pub async fn start_fallback_server() -> Result<(), Box<dyn std::error::Error>> {
     let server_header = if EXPOSE_VERSION {
         ENGINE.to_string()
     } else {
@@ -27,8 +27,8 @@ pub async fn start_fallback_server()  -> Result<(), Box<dyn std::error::Error>> 
         Content-Length: {}\r\n\
         Connection: close\r\n\
         \r\n\
-        {}", 
-        html_body.len(), 
+        {}",
+        html_body.len(),
         html_body
     );
     let response = Arc::new(response);
@@ -39,7 +39,7 @@ pub async fn start_fallback_server()  -> Result<(), Box<dyn std::error::Error>> 
                 let response = Arc::clone(&response);
                 tokio::spawn(async move {
                     let mut buf = [0; 1024];
-                    
+
                     match socket.read(&mut buf).await {
                         Ok(0) => (),
                         Ok(_) => {
@@ -54,7 +54,6 @@ pub async fn start_fallback_server()  -> Result<(), Box<dyn std::error::Error>> 
             Err(e) => {
                 error!(error=%e, "Failed to accept incoming connection on fallback server");
             }
-        } 
-        
+        }
     }
 }

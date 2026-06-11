@@ -1,6 +1,6 @@
 use crate::{config::get_services_config::ClientConfig, network::listeners::start_listen_port};
 use std::collections::HashSet;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 pub fn start_listen(configs: Vec<ClientConfig>, expose_version: bool) {
     let unique_ports: HashSet<u16> = configs

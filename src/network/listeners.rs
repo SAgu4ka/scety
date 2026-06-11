@@ -1,13 +1,17 @@
-use std::time::Duration;
-use tokio::io::{AsyncWriteExt, AsyncReadExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::time::timeout;
 use crate::config::get_services_config::ClientConfig;
 use crate::http::error_pages::send;
 use httparse::{EMPTY_HEADER, Request, Status};
-use tracing::{error, info, debug};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::time::timeout;
+use tracing::{debug, error, info};
 
-pub fn start_listen_port(port: u16, all_config_for_this_port: Vec<ClientConfig>, expose_version: bool) {
+pub fn start_listen_port(
+    port: u16,
+    all_config_for_this_port: Vec<ClientConfig>,
+    expose_version: bool,
+) {
     info!(port=%port, "Start listen port");
     tokio::spawn(async move {
         let tcp_listener = match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
@@ -29,7 +33,9 @@ pub fn start_listen_port(port: u16, all_config_for_this_port: Vec<ClientConfig>,
                         }
                     });
                 }
-                Err(e) => { error!(error=%e, port=%port, "Error listening port") }
+                Err(e) => {
+                    error!(error=%e, port=%port, "Error listening port")
+                }
             }
         }
     });
@@ -50,7 +56,10 @@ async fn handle_client(
             let n = match client_socket.read(&mut buf[read_bytes..]).await {
                 Ok(0) => return Ok(None),
                 Ok(n) => n,
-                Err(e) => { error!(error=%e, "Error reading socket"); return Err(e.into()); }
+                Err(e) => {
+                    error!(error=%e, "Error reading socket");
+                    return Err(e.into());
+                }
             };
 
             read_bytes += n;
@@ -60,7 +69,8 @@ async fn handle_client(
 
             match req.parse(&buf[..read_bytes]) {
                 Ok(Status::Complete(_)) => {
-                    let host = headers.iter()
+                    let host = headers
+                        .iter()
                         .find(|h| h.name.eq_ignore_ascii_case("Host"))
                         .map(|h| String::from_utf8_lossy(h.value).into_owned());
 
@@ -73,8 +83,15 @@ async fn handle_client(
                             .unwrap_or(&req_host)
                             .to_string();
 
-                        if let Some(target_config) = configs.iter().find(|cfg| cfg.host.as_deref() == Some(&clean_host)) {
-                            return Ok(Some((buf, read_bytes, target_config.upstream.as_ref().and_then(|u| u.port))));
+                        if let Some(target_config) = configs
+                            .iter()
+                            .find(|cfg| cfg.host.as_deref() == Some(&clean_host))
+                        {
+                            return Ok(Some((
+                                buf,
+                                read_bytes,
+                                target_config.upstream.as_ref().and_then(|u| u.port),
+                            )));
                         }
                     }
                     return Ok(None);
@@ -90,10 +107,14 @@ async fn handle_client(
                 }
             }
         }
-    }).await;
+    })
+    .await;
 
-    let client_ip = client_socket.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "unknown".to_string());
-   
+    let client_ip = client_socket
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
     match parse_result {
         Err(e) => {
             error!(client_ip=%client_ip, error=%e, "The client was reset due to a slow connection");
@@ -110,7 +131,6 @@ async fn handle_client(
             Ok(())
         }
         Ok(Ok(Some((buf, read_bytes, target_port)))) => {
-
             let target_addr = format!("127.0.0.1:{:?}", target_port);
 
             match timeout(Duration::from_secs(30), TcpStream::connect(&target_addr)).await {
@@ -127,7 +147,9 @@ async fn handle_client(
                 Ok(Ok(mut upstream_socket)) => {
                     let header = format!("X-Forwarded-For: {}\r\n", client_ip);
 
-                    let final_buf = if let Some(pos) = buf[..read_bytes].windows(4).position(|w| w == b"\r\n\r\n") {
+                    let final_buf = if let Some(pos) =
+                        buf[..read_bytes].windows(4).position(|w| w == b"\r\n\r\n")
+                    {
                         let mut new_buf = Vec::new();
                         new_buf.extend_from_slice(&buf[..pos + 2]);
                         new_buf.extend_from_slice(header.as_bytes());

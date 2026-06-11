@@ -1,9 +1,9 @@
 use crate::cli::commands::install::install;
 use crate::config::get_services_config::get_all_configs;
-use crate::config::settings::{SERVICES_CONFIGS_PATH, EXPOSE_VERSION};
+use crate::config::settings::{EXPOSE_VERSION, SERVICES_CONFIGS_PATH};
 use crate::network::fallback_server::start_fallback_server;
 use crate::network::global_router::start_listen;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let is_systemd = std::env::var("INVOCATION_ID").is_ok();

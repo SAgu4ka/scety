@@ -15,5 +15,5 @@ pub enum Commands {
     Status,
     Check,
     Uninstall,
-    Install
+    Install,
 }

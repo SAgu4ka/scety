@@ -1,6 +1,6 @@
-use std::borrow::Cow;
-use chrono::Utc;
 use crate::http::generate_http_response::get_status_message;
+use chrono::Utc;
+use std::borrow::Cow;
 use std::fmt::Write;
 use tracing::debug;
 
@@ -22,7 +22,7 @@ impl<'a> HttpResponse<'a> {
             connection: connection.to_string(),
             expose_version,
             headers: Vec::with_capacity(8),
-            body: None
+            body: None,
         }
     }
 
@@ -30,8 +30,10 @@ impl<'a> HttpResponse<'a> {
         let body_cow = body.into();
         debug!(content_len=%body_cow.len(), "Adding Content to an HTTP Response");
 
-        self.headers.push(("Content-Type".to_string(), content_type.to_string()));
-        self.headers.push(("Content-Length".to_string(), body_cow.len().to_string()));
+        self.headers
+            .push(("Content-Type".to_string(), content_type.to_string()));
+        self.headers
+            .push(("Content-Length".to_string(), body_cow.len().to_string()));
 
         self.body = Some(body_cow);
         self
@@ -44,10 +46,18 @@ impl<'a> HttpResponse<'a> {
 
         let code_message = get_status_message(self.code);
 
-        let _ = write!(&mut response_string, "HTTP/1.1 {} {}\r\n", self.code, code_message);
+        let _ = write!(
+            &mut response_string,
+            "HTTP/1.1 {} {}\r\n",
+            self.code, code_message
+        );
 
         if self.expose_version {
-            let _ = write!(&mut response_string, "Server: {}/{}\r\n", ENGINE_NAME, ENGINE_VERSION);
+            let _ = write!(
+                &mut response_string,
+                "Server: {}/{}\r\n",
+                ENGINE_NAME, ENGINE_VERSION
+            );
         } else {
             let _ = write!(&mut response_string, "Server: {}\r\n", ENGINE_NAME);
         };

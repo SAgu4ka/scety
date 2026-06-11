@@ -4,41 +4,41 @@ const SERVICE_CONTENT: &str = "[Unit]\nDescription=Scety reverse proxy\nAfter=ne
 
 pub async fn install() -> Result<(), Box<dyn std::error::Error>> {
     if !nix::unistd::Uid::effective().is_root() {
-            error!("Run as root or with sudo");
-            std::process::exit(1);
-        }
+        error!("Run as root or with sudo");
+        std::process::exit(1);
+    }
 
-        if std::path::Path::new("/etc/systemd/system/scety.service").exists() {
-            let status = std::process::Command::new("systemctl")
-                .args(["is-active", "scety"])
-                .output()?;
-            
-            if status.stdout.trim_ascii() == b"active" {
-                info!("Scety is already running");
-                return Ok(());
-            }
-            
-            info!("Scety is already installed, starting...");
-            std::process::Command::new("systemctl")
-                .args(["start", "scety"])
-                .status()?;
+    if std::path::Path::new("/etc/systemd/system/scety.service").exists() {
+        let status = std::process::Command::new("systemctl")
+            .args(["is-active", "scety"])
+            .output()?;
+
+        if status.stdout.trim_ascii() == b"active" {
+            info!("Scety is already running");
             return Ok(());
         }
 
-        let exe_path = std::env::current_exe()?;
-
-        let service_content = SERVICE_CONTENT.replace("{exe_path}", &exe_path.to_string_lossy());
-
-        std::fs::write("/etc/systemd/system/scety.service", service_content)?;
-        info!("Service file created");
+        info!("Scety is already installed, starting...");
         std::process::Command::new("systemctl")
-            .args(["daemon-reload"])
+            .args(["start", "scety"])
             .status()?;
+        return Ok(());
+    }
 
-        std::process::Command::new("systemctl")
-            .args(["enable", "--now", "scety"])
-            .status()?;
+    let exe_path = std::env::current_exe()?;
 
-        info!("Scety successfully installed and started as a systemd service");
-        Ok(())
+    let service_content = SERVICE_CONTENT.replace("{exe_path}", &exe_path.to_string_lossy());
+
+    std::fs::write("/etc/systemd/system/scety.service", service_content)?;
+    info!("Service file created");
+    std::process::Command::new("systemctl")
+        .args(["daemon-reload"])
+        .status()?;
+
+    std::process::Command::new("systemctl")
+        .args(["enable", "--now", "scety"])
+        .status()?;
+
+    info!("Scety successfully installed and started as a systemd service");
+    Ok(())
 }

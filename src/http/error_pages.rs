@@ -1,7 +1,7 @@
+use crate::http::generate_http_response::{generate_text_response, get_status_message};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use crate::http::generate_http_response::{generate_text_response, get_status_message};
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 const ERROR_TEMPLATE: &str = include_str!("../models/error_template.html");
 const ENGINE: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
@@ -19,15 +19,26 @@ fn generate_html(code: u16, message: &str, expose_version: bool) -> String {
 }
 
 pub async fn send(stream: &mut TcpStream, code: u16, expose_version: bool) -> std::io::Result<()> {
-    let client_ip = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "unknown".to_string());
+    let client_ip = stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
     info!(client_ip=%client_ip, "Sending an error to the client");
     let message = get_status_message(code);
     let html_content = generate_html(code, message, expose_version);
-    
-    let response = generate_text_response(code, "close", true, Some("text/html; charset=utf-8"), Some(&html_content), expose_version).await;
+
+    let response = generate_text_response(
+        code,
+        "close",
+        true,
+        Some("text/html; charset=utf-8"),
+        Some(&html_content),
+        expose_version,
+    )
+    .await;
 
     stream.write_all(response.as_bytes()).await?;
     stream.flush().await?;
-    
+
     Ok(())
 }

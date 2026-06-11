@@ -1,4 +1,4 @@
-use tracing::{warn, info};
+use tracing::{info, warn};
 
 pub async fn reload() -> Result<(), Box<dyn std::error::Error>> {
     let status = std::process::Command::new("systemctl")
