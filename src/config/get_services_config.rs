@@ -1,4 +1,4 @@
-#![allow(unused)]
+#![allow(unused)] // пока что заглушка нереализованных переменных, они задуманы на будущее
 
 use crate::config::settings::SERVICES_CONFIGS_PATH;
 use serde::Deserialize;

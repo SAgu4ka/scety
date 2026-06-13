@@ -5,49 +5,75 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
-pub fn start_listen_port(
+pub async fn start_listen_port(
     port: u16,
     all_config_for_this_port: Vec<ClientConfig>,
     expose_version: bool,
+    token: CancellationToken,
 ) {
     info!(port=%port, "Start listen port");
-    tokio::spawn(async move {
-        let tcp_listener = match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
-            Ok(listener) => listener,
-            Err(e) => {
-                error!(error=%e, port=%port, "Error in starting listen port");
-                return;
-            }
-        };
+    let tcp_listener = match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            error!(error=%e, port=%port, "Error in starting listen port");
+            return;
+        }
+    };
 
-        loop {
-            match tcp_listener.accept().await {
-                Ok((socket, addr)) => {
-                    debug!(client_ip=%addr, "New client connection");
-                    let configs_clone = all_config_for_this_port.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_client(socket, configs_clone, expose_version).await {
-                            error!(error=%e, port=%port, "Error handling client connection");
-                        }
-                    });
-                }
-                Err(e) => {
-                    error!(error=%e, port=%port, "Error listening port")
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                info!(port=%port, "Listener shutting down");
+                break;
+            }
+
+            result = tcp_listener.accept() => {
+                match result {
+                    Ok((socket, addr)) => {
+                        debug!(client_ip=%addr, "New client connection");
+                        let configs_clone = all_config_for_this_port.clone();
+                        let child = token.child_token();
+
+                        tokio::spawn(async move {
+                            handle_client(socket, configs_clone, expose_version, child).await
+                        });
+                    }
+                    Err(e) => {
+                        error!(error=%e, port=%port, "Error listening port")
+                    }
                 }
             }
         }
-    });
+    }
 }
 
 async fn handle_client(
     mut client_socket: TcpStream,
     configs: Vec<ClientConfig>,
     expose_version: bool,
+    token: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     debug!("Starting client connection processing");
 
+    tokio::select! {
+        _ = token.cancelled() => {
+            send(&mut client_socket, 503, expose_version).await.ok();
+            Ok(())
+        }
+        result = process_request(&mut client_socket, &configs, expose_version) => {
+            result
+        }
+    }
+}
+
+async fn process_request(
+    client_socket: &mut TcpStream,
+    configs: &[ClientConfig],
+    expose_version: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let parse_result = timeout(Duration::from_secs(5), async {
         let mut buf = vec![0u8; 4096];
         let mut read_bytes = 0;
@@ -118,7 +144,7 @@ async fn handle_client(
     match parse_result {
         Err(e) => {
             error!(client_ip=%client_ip, error=%e, "The client was reset due to a slow connection");
-            send(&mut client_socket, 408, expose_version).await?;
+            send(&mut *client_socket, 408, expose_version).await?;
             Ok(())
         }
         Ok(Err(e)) => {
@@ -127,14 +153,14 @@ async fn handle_client(
         }
         Ok(Ok(None)) => {
             debug!(client_ip=%client_ip, "No configurations were found matching the client's request");
-            send(&mut client_socket, 404, expose_version).await?;
+            send(&mut *client_socket, 404, expose_version).await?;
             Ok(())
         }
         Ok(Ok(Some((buf, read_bytes, target_port)))) => {
             let target_addr = match target_port {
                 Some(port) => format!("127.0.0.1:{}", port),
                 None => {
-                    send(&mut client_socket, 502, expose_version).await?;
+                    send(&mut *client_socket, 502, expose_version).await?;
                     return Ok(());
                 }
             };
@@ -142,12 +168,12 @@ async fn handle_client(
             match timeout(Duration::from_secs(30), TcpStream::connect(&target_addr)).await {
                 Err(e) => {
                     error!(error=%e, "Upstream connection timed out");
-                    send(&mut client_socket, 504, expose_version).await?;
+                    send(&mut *client_socket, 504, expose_version).await?;
                     Ok(())
                 }
                 Ok(Err(e)) => {
                     error!(error=%e, "Upstream did not accept the connection");
-                    send(&mut client_socket, 502, expose_version).await?;
+                    send(&mut *client_socket, 502, expose_version).await?;
                     Ok(())
                 }
                 Ok(Ok(mut upstream_socket)) => {
@@ -167,7 +193,8 @@ async fn handle_client(
 
                     debug!(target=%target_addr, "Proxying request to upstream");
                     upstream_socket.write_all(&final_buf).await?;
-                    tokio::io::copy_bidirectional(&mut client_socket, &mut upstream_socket).await?;
+                    tokio::io::copy_bidirectional(&mut *client_socket, &mut upstream_socket)
+                        .await?;
                     Ok(())
                 }
             }

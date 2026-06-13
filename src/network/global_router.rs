@@ -1,8 +1,16 @@
 use crate::{config::get_services_config::ClientConfig, network::listeners::start_listen_port};
 use std::collections::HashSet;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
-pub fn start_listen(configs: Vec<ClientConfig>, expose_version: bool) {
+pub fn start_listen(
+    configs: Vec<ClientConfig>,
+    expose_version: bool,
+    token: CancellationToken,
+) -> JoinSet<()> {
+    let mut set = JoinSet::new();
+
     let unique_ports: HashSet<u16> = configs
         .iter()
         .filter_map(|config| config.listen_port)
@@ -16,6 +24,10 @@ pub fn start_listen(configs: Vec<ClientConfig>, expose_version: bool) {
             .cloned()
             .collect();
         debug!(port=%port, "Starting port listening");
-        start_listen_port(port, all_config_for_this_port, expose_version);
+        let token = token.clone();
+        set.spawn(async move {
+            start_listen_port(port, all_config_for_this_port, expose_version, token).await;
+        });
     }
+    set
 }

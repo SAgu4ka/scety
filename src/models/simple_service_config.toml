@@ -14,7 +14,7 @@ service_timeout="30s" #timeout для сервиса, также как и с т
 #если есть например [upstream_6767], но у нас listens_port=[80, 443], то выдаем ошибку типо "... port 6767 found, maybe there was listens_port=[80, 443, 6767]?"
 
 
-[sll]
+[ssl]
 cert="/etc/ssl/cert"
 key="/etc/ssl/key"
 

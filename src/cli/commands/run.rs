@@ -3,7 +3,8 @@ use crate::config::get_services_config::get_all_configs;
 use crate::config::settings::{EXPOSE_VERSION, SERVICES_CONFIGS_PATH};
 use crate::network::fallback_server::start_fallback_server;
 use crate::network::global_router::start_listen;
-use tracing::{debug, info};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let is_systemd = std::env::var("INVOCATION_ID").is_ok();
@@ -18,9 +19,21 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             info!("Successfully loaded {} configs", all_configs.len());
             info!("Start listeners...");
-            start_listen(all_configs, EXPOSE_VERSION);
-            tokio::signal::ctrl_c().await?;
+            let token = CancellationToken::new();
+            let mut listeners = start_listen(all_configs, EXPOSE_VERSION, token.clone());
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Shutting down...");
+                    token.cancel();
+                }
+                res = listeners.join_next() => {
+                    error!("Listener unexpectedly died: {:?}", res);
+                    std::process::exit(1);
+                }
+            }
+            listeners.join_all().await;
         }
+
         Ok(())
     } else {
         install().await?;
