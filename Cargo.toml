@@ -16,3 +16,4 @@ tracing-subscriber = { version = "0.3", features = ["chrono", "env-filter"] }
 clap = { version = "4", features = ["derive"] }
 nix = { version = "0.31", features = ["user"] }
 tokio-util = "0.7.18"
+humantime = "2.3.0"

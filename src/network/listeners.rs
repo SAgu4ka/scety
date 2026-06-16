@@ -1,5 +1,7 @@
+use crate::config::get_scety_config::scety_config;
 use crate::config::get_services_config::ClientConfig;
 use crate::http::error_pages::send;
+use crate::network::ip_limit;
 use httparse::{EMPTY_HEADER, Request, Status};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -34,10 +36,25 @@ pub async fn start_listen_port(
                 match result {
                     Ok((socket, addr)) => {
                         debug!(client_ip=%addr, "New client connection");
+
+                        let limit = scety_config().ip_limitation.unwrap_or(20);
+                        let guard = match ip_limit::try_acquire(addr.ip(), limit) {
+                            Ok(guard) => guard,
+                            Err(()) => {
+                                debug!(client_ip=%addr, limit=%limit, "Connection limit reached for this IP");
+                                let mut socket = socket;
+                                tokio::spawn(async move {
+                                    send(&mut socket, 429, expose_version).await.ok();
+                                });
+                                continue;
+                            }
+                        };
+
                         let configs_clone = all_config_for_this_port.clone();
                         let child = token.child_token();
 
                         tokio::spawn(async move {
+                            let _guard = guard;
                             handle_client(socket, configs_clone, expose_version, child).await
                         });
                     }
@@ -74,7 +91,11 @@ async fn process_request(
     configs: &[ClientConfig],
     expose_version: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let parse_result = timeout(Duration::from_secs(5), async {
+    let client_timeout = scety_config()
+        .client_timeout
+        .unwrap_or(Duration::from_secs(5));
+
+    let parse_result = timeout(client_timeout, async {
         let mut buf = vec![0u8; 4096];
         let mut read_bytes = 0;
 

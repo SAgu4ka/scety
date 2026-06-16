@@ -1,10 +1,11 @@
 use crate::cli::commands::install::install;
+use crate::config::get_scety_config::{SCETY_CONFIG, ScetyConfig, get_scety_config};
 use crate::config::get_services_config::get_all_configs;
 use crate::config::settings::{EXPOSE_VERSION, SERVICES_CONFIGS_PATH};
 use crate::network::fallback_server::start_fallback_server;
 use crate::network::global_router::start_listen;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let is_systemd = std::env::var("INVOCATION_ID").is_ok();
@@ -12,6 +13,20 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if is_systemd {
         info!("Start scety...");
         debug!(config_path=%SERVICES_CONFIGS_PATH, expose_version=%EXPOSE_VERSION, "Starting arguments");
+
+        debug!("Loading main ScetyConfig...");
+        if let Some(loaded_config) = get_scety_config()? {
+            SCETY_CONFIG
+                .set(loaded_config)
+                .map_err(|_| "ScetyConfig was initialized twice!")?;
+            debug!("Main ScetyConfig successfully initialized");
+        } else {
+            warn!("ScetyConfig file exists but parsed as empty. Using defaults.");
+            SCETY_CONFIG
+                .set(ScetyConfig::new(None, None))
+                .map_err(|_| "ScetyConfig was initialized twice!")?;
+        }
+
         debug!("Start load configs...");
         let all_configs = get_all_configs();
         if all_configs.is_empty() {

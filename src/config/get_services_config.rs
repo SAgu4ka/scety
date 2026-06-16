@@ -26,8 +26,6 @@ pub struct ClientConfig {
 pub struct UpstreamConfig {
     pub port: Option<u16>,
     pub ports: Option<Vec<u16>>,
-    pub ip_limitation: Option<i32>,
-    pub client_timeout: Option<String>,
     pub service_timeout: Option<String>,
 }
 
@@ -65,8 +63,8 @@ pub fn get_all_configs() -> Vec<ClientConfig> {
     for conf in all_configs.iter() {
         let content = match fs::read_to_string(conf) {
             Ok(c) => c,
-            Err(_) => {
-                error!(file=%conf.to_string_lossy(), "Failed to read configuration file");
+            Err(e) => {
+                error!(error=%e, file=%conf.to_string_lossy(), "Failed to read configuration file");
                 continue;
             }
         };

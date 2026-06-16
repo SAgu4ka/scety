@@ -8,3 +8,4 @@ static_toml! {
 
 pub const SERVICES_CONFIGS_PATH: &str = CONFIG.paths.services_configs_path;
 pub const EXPOSE_VERSION: bool = CONFIG.main.expose_version;
+pub const SCETY_CONFIG_PATH: &str = CONFIG.paths.scety_config_path;
