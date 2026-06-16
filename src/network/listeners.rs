@@ -91,9 +91,14 @@ async fn process_request(
     configs: &[ClientConfig],
     expose_version: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client_timeout = scety_config()
-        .client_timeout
-        .unwrap_or(Duration::from_secs(5));
+    let client_ip = client_socket
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let client_timeout = scety_config().client_timeout.unwrap();
+    let mut buf_warn = false;
+    let max_buf = scety_config().client_header_buffer.unwrap();
 
     let parse_result = timeout(client_timeout, async {
         let mut buf = vec![0u8; 4096];
@@ -145,7 +150,16 @@ async fn process_request(
                 }
                 Ok(Status::Partial) => {
                     if read_bytes >= buf.len() {
+                        if buf_warn {
+                            error!(client_ip=%client_ip, "The buffer is full");
+                            send(&mut *client_socket, 431, expose_version).await?;
+                            return Ok(None);
+                        }
                         buf.resize(buf.len() * 2, 0);
+                        if buf.len() > max_buf as usize {
+                            buf.resize(max_buf as usize, 0);
+                            buf_warn = true;
+                        }
                     }
                 }
                 Err(e) => {
@@ -156,11 +170,6 @@ async fn process_request(
         }
     })
     .await;
-
-    let client_ip = client_socket
-        .peer_addr()
-        .map(|a| a.to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
 
     match parse_result {
         Err(e) => {

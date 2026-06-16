@@ -10,6 +10,7 @@ pub static SCETY_CONFIG: OnceLock<ScetyConfig> = OnceLock::new();
 #[derive(Deserialize)]
 struct TomlConfig {
     limitation: LimitationSection,
+    limit_buffers: LimitBuffersSection,
 }
 
 #[derive(Deserialize)]
@@ -18,21 +19,34 @@ struct LimitationSection {
     client_timeout: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct LimitBuffersSection {
+    client_header: Option<i32>,
+}
+
 pub struct ScetyConfig {
     pub ip_limitation: Option<i32>,
     pub client_timeout: Option<Duration>,
+    pub client_header_buffer: Option<i32>,
 }
 
 impl ScetyConfig {
-    pub fn new(ip_limitation: Option<i32>, client_timeout: Option<String>) -> Self {
+    pub fn new(
+        ip_limitation: Option<i32>,
+        client_timeout: Option<String>,
+        client_header_buffer: Option<i32>,
+    ) -> Self {
         let ip_limitation = Some(ip_limitation.unwrap_or(20));
         let client_timeout = client_timeout.unwrap_or_else(|| "5s".to_string());
 
         let client_timeout_duration = humantime::parse_duration(&client_timeout).ok();
 
+        let client_header_buffer = Some(client_header_buffer.unwrap_or(16 * 1024));
+
         Self {
             ip_limitation,
             client_timeout: client_timeout_duration,
+            client_header_buffer,
         }
     }
 }
@@ -68,6 +82,7 @@ pub fn get_scety_config() -> std::io::Result<Option<ScetyConfig>> {
     let config = ScetyConfig::new(
         toml_data.limitation.ip_limitation,
         toml_data.limitation.client_timeout,
+        toml_data.limit_buffers.client_header,
     );
 
     Ok(Some(config))
