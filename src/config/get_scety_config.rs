@@ -9,8 +9,8 @@ pub static SCETY_CONFIG: OnceLock<ScetyConfig> = OnceLock::new();
 
 #[derive(Deserialize)]
 struct TomlConfig {
-    limitation: LimitationSection,
-    limit_buffers: LimitBuffersSection,
+    limitation: Option<LimitationSection>,
+    limit_buffers: Option<LimitBuffersSection>,
 }
 
 #[derive(Deserialize)]
@@ -39,7 +39,16 @@ impl ScetyConfig {
         let ip_limitation = Some(ip_limitation.unwrap_or(20));
         let client_timeout = client_timeout.unwrap_or_else(|| "5s".to_string());
 
-        let client_timeout_duration = humantime::parse_duration(&client_timeout).ok();
+        let client_timeout_duration = match client_timeout.trim() {
+            "-1" => None,
+            other => match humantime::parse_duration(other) {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    tracing::warn!(error=%e, value=%other, "Invalid client_timeout, falling back to 5s");
+                    Some(Duration::from_secs(5))
+                }
+            },
+        };
 
         let client_header_buffer = Some(client_header_buffer.unwrap_or(16 * 1024));
 
@@ -80,9 +89,9 @@ pub fn get_scety_config() -> std::io::Result<Option<ScetyConfig>> {
     };
 
     let config = ScetyConfig::new(
-        toml_data.limitation.ip_limitation,
-        toml_data.limitation.client_timeout,
-        toml_data.limit_buffers.client_header,
+        toml_data.limitation.as_ref().unwrap().ip_limitation,
+        toml_data.limitation.unwrap().client_timeout,
+        toml_data.limit_buffers.unwrap().client_header,
     );
 
     Ok(Some(config))

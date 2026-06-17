@@ -96,80 +96,32 @@ async fn process_request(
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "unknown".to_string());
 
-    let client_timeout = scety_config().client_timeout.unwrap();
-    let mut buf_warn = false;
+    let client_timeout = scety_config().client_timeout;
     let max_buf = scety_config().client_header_buffer.unwrap();
 
-    let parse_result = timeout(client_timeout, async {
-        let mut buf = vec![0u8; 4096];
-        let mut read_bytes = 0;
-
-        loop {
-            let n = match client_socket.read(&mut buf[read_bytes..]).await {
-                Ok(0) => return Ok(None),
-                Ok(n) => n,
-                Err(e) => {
-                    error!(error=%e, "Error reading socket");
-                    return Err(e.into());
-                }
-            };
-
-            read_bytes += n;
-
-            let mut headers = [EMPTY_HEADER; 64];
-            let mut req = Request::new(&mut headers);
-
-            match req.parse(&buf[..read_bytes]) {
-                Ok(Status::Complete(_)) => {
-                    let host = headers
-                        .iter()
-                        .find(|h| h.name.eq_ignore_ascii_case("Host"))
-                        .map(|h| String::from_utf8_lossy(h.value).into_owned());
-
-                    if let Some(req_host) = host {
-                        let clean_host = req_host
-                            .trim_start_matches("http://")
-                            .trim_start_matches("https://")
-                            .split(':')
-                            .next()
-                            .unwrap_or(&req_host)
-                            .to_string();
-
-                        if let Some(target_config) = configs
-                            .iter()
-                            .find(|cfg| cfg.host.as_deref() == Some(&clean_host))
-                        {
-                            return Ok(Some((
-                                buf,
-                                read_bytes,
-                                target_config.upstream.as_ref().and_then(|u| u.port),
-                            )));
-                        }
-                    }
-                    return Ok(None);
-                }
-                Ok(Status::Partial) => {
-                    if read_bytes >= buf.len() {
-                        if buf_warn {
-                            error!(client_ip=%client_ip, "The buffer is full");
-                            send(&mut *client_socket, 431, expose_version).await?;
-                            return Ok(None);
-                        }
-                        buf.resize(buf.len() * 2, 0);
-                        if buf.len() > max_buf as usize {
-                            buf.resize(max_buf as usize, 0);
-                            buf_warn = true;
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!(error=%e, "Error parsing HTTP request");
-                    return Ok(None);
-                }
-            }
+    let parse_result = match client_timeout {
+        Some(d) => {
+            timeout(
+                d,
+                read_request(
+                    client_socket,
+                    max_buf as usize,
+                    &client_ip,
+                    expose_version,
+                    configs,
+                ),
+            )
+            .await
         }
-    })
-    .await;
+        None => Ok(read_request(
+            client_socket,
+            max_buf as usize,
+            &client_ip,
+            expose_version,
+            configs,
+        )
+        .await),
+    };
 
     match parse_result {
         Err(e) => {
@@ -227,6 +179,78 @@ async fn process_request(
                         .await?;
                     Ok(())
                 }
+            }
+        }
+    }
+}
+
+async fn read_request(
+    client_socket: &mut TcpStream,
+    max_buf: usize,
+    client_ip: &str,
+    expose_version: bool,
+    configs: &[ClientConfig],
+) -> Result<Option<(Vec<u8>, usize, Option<u16>)>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut read_bytes = 0;
+    let mut buf = vec![0u8; 4096];
+    loop {
+        let n = match client_socket.read(&mut buf[read_bytes..]).await {
+            Ok(0) => return Ok(None),
+            Ok(n) => n,
+            Err(e) => {
+                error!(error=%e, "Error reading socket");
+                return Err(e.into());
+            }
+        };
+
+        read_bytes += n;
+
+        let mut headers = [EMPTY_HEADER; 64];
+        let mut req = Request::new(&mut headers);
+
+        match req.parse(&buf[..read_bytes]) {
+            Ok(Status::Complete(_)) => {
+                let host = headers
+                    .iter()
+                    .find(|h| h.name.eq_ignore_ascii_case("Host"))
+                    .map(|h| String::from_utf8_lossy(h.value).into_owned());
+
+                if let Some(req_host) = host {
+                    let clean_host = req_host
+                        .trim_start_matches("http://")
+                        .trim_start_matches("https://")
+                        .split(':')
+                        .next()
+                        .unwrap_or(&req_host)
+                        .to_string();
+
+                    if let Some(target_config) = configs
+                        .iter()
+                        .find(|cfg| cfg.host.as_deref() == Some(&clean_host))
+                    {
+                        return Ok(Some((
+                            buf,
+                            read_bytes,
+                            target_config.upstream.as_ref().and_then(|u| u.port),
+                        )));
+                    }
+                }
+                return Ok(None);
+            }
+            Ok(Status::Partial) => {
+                if read_bytes >= buf.len() {
+                    if buf.len() >= max_buf {
+                        error!(client_ip=%client_ip, "The buffer is full");
+                        send(&mut *client_socket, 431, expose_version).await?;
+                        return Ok(None);
+                    }
+                    let new_len = (buf.len() * 2).min(max_buf);
+                    buf.resize(new_len, 0);
+                }
+            }
+            Err(e) => {
+                error!(error=%e, "Error parsing HTTP request");
+                return Ok(None);
             }
         }
     }
