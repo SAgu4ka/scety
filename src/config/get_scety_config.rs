@@ -13,13 +13,13 @@ struct TomlConfig {
     limit_buffers: Option<LimitBuffersSection>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct LimitationSection {
     ip_limitation: Option<i32>,
     client_timeout: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct LimitBuffersSection {
     client_header: Option<i32>,
 }
@@ -88,10 +88,13 @@ pub fn get_scety_config() -> std::io::Result<Option<ScetyConfig>> {
         }
     };
 
+    let limitation = toml_data.limitation.unwrap_or_default();
+    let limit_buffers = toml_data.limit_buffers.unwrap_or_default();
+
     let config = ScetyConfig::new(
-        toml_data.limitation.as_ref().unwrap().ip_limitation,
-        toml_data.limitation.unwrap().client_timeout,
-        toml_data.limit_buffers.unwrap().client_header,
+        limitation.ip_limitation,
+        limitation.client_timeout,
+        limit_buffers.client_header,
     );
 
     Ok(Some(config))
