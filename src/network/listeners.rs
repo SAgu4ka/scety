@@ -192,7 +192,7 @@ async fn read_request(
     configs: &[ClientConfig],
 ) -> Result<Option<(Vec<u8>, usize, Option<u16>)>, Box<dyn std::error::Error + Send + Sync>> {
     let mut read_bytes = 0;
-    let mut buf = vec![0u8; 4096];
+    let mut buf = vec![0u8; max_buf.min(4096)];
     loop {
         let n = match client_socket.read(&mut buf[read_bytes..]).await {
             Ok(0) => return Ok(None),
