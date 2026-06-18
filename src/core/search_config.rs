@@ -21,7 +21,8 @@ impl HostRouter {
     }
 
     pub fn add_pattern(&mut self, pattern: &str) {
-        if pattern == "*" || pattern == "**" { // The simple symbols "*" and "**" mean a match for all domains.
+        if pattern == "*" || pattern == "**" {
+            // The simple symbols "*" and "**" mean a match for all domains.
             self.catch_all = true;
             return;
         }
@@ -50,16 +51,16 @@ impl HostRouter {
             return true;
         }
 
-        if let Some((_, rest)) = host.split_once('.') {
-            if self.leading_wildcards.contains(rest) {
-                return true;
-            }
+        if let Some((_, rest)) = host.split_once('.')
+            && self.leading_wildcards.contains(rest)
+        {
+            return true;
         }
 
-        if let Some((prefix, _)) = host.rsplit_once('.') {
-            if self.trailing_wildcards.contains(prefix) {
-                return true;
-            }
+        if let Some((prefix, _)) = host.rsplit_once('.')
+            && self.trailing_wildcards.contains(prefix)
+        {
+            return true;
         }
 
         for pattern in &self.complex_patterns {
