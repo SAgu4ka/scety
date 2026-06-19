@@ -1,4 +1,5 @@
-#![allow(unused)]
+#![allow(warnings)]
+
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
