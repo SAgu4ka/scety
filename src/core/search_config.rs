@@ -1,6 +1,13 @@
 #![allow(unused)]
 use std::collections::HashSet;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MatchKind {
+    CatchAll,
+    Wildcard,
+    Exact,
+}
+
 pub struct HostRouter {
     exact_matches: HashSet<String>,
     leading_wildcards: HashSet<String>,
@@ -42,34 +49,34 @@ impl HostRouter {
         }
     }
 
-    pub fn matches(&self, host: &str) -> bool {
+    pub fn matches(&self, host: &str) -> Option<MatchKind> {
         if self.catch_all {
-            return true;
+            return Some(MatchKind::CatchAll);
         }
 
         if self.exact_matches.contains(host) {
-            return true;
+            return Some(MatchKind::Exact);
         }
 
         if let Some((_, rest)) = host.split_once('.')
             && self.leading_wildcards.contains(rest)
         {
-            return true;
+            return Some(MatchKind::Wildcard);
         }
 
         if let Some((prefix, _)) = host.rsplit_once('.')
             && self.trailing_wildcards.contains(prefix)
         {
-            return true;
+            return Some(MatchKind::Wildcard);
         }
 
         for pattern in &self.complex_patterns {
             if dp_host_matches(pattern, host) {
-                return true;
+                return Some(MatchKind::Wildcard);
             }
         }
 
-        false
+        None
     }
 }
 
