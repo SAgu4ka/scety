@@ -32,7 +32,7 @@ listen_port = 80
 port = 3000
 ```
 ## Wildcards
-!!IT'S NOT DONE YET, IT'S A BLANK
+
 Scety features a flexible routing engine that supports both single-level and multi-level wildcards:
 
 * **`*` (Single-level):** Matches exactly one domain segment. For example, `*.example.com` matches `api.example.com`, but will **not** match `v1.api.example.com`.

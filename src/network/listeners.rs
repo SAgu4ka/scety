@@ -1,8 +1,10 @@
 use crate::config::get_scety_config::scety_config;
 use crate::config::get_services_config::ClientConfig;
+use crate::core::search_router::SearchRouter;
 use crate::http::error_pages::send;
 use crate::network::ip_limit;
 use httparse::{EMPTY_HEADER, Request, Status};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -24,6 +26,8 @@ pub async fn start_listen_port(
             return;
         }
     };
+
+    let search_router = Arc::new(SearchRouter::new(all_config_for_this_port));
 
     loop {
         tokio::select! {
@@ -50,12 +54,12 @@ pub async fn start_listen_port(
                             }
                         };
 
-                        let configs_clone = all_config_for_this_port.clone();
                         let child = token.child_token();
+                        let search_router = Arc::clone(&search_router);
 
                         tokio::spawn(async move {
                             let _guard = guard;
-                            handle_client(socket, configs_clone, expose_version, child).await
+                            handle_client(socket, expose_version, child, search_router).await
                         });
                     }
                     Err(e) => {
@@ -69,9 +73,9 @@ pub async fn start_listen_port(
 
 async fn handle_client(
     mut client_socket: TcpStream,
-    configs: Vec<ClientConfig>,
     expose_version: bool,
     token: CancellationToken,
+    search_router: Arc<SearchRouter>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     debug!("Starting client connection processing");
 
@@ -80,7 +84,7 @@ async fn handle_client(
             send(&mut client_socket, 503, expose_version).await.ok();
             Ok(())
         }
-        result = process_request(&mut client_socket, &configs, expose_version) => {
+        result = process_request(&mut client_socket, expose_version, search_router) => {
             result
         }
     }
@@ -88,8 +92,8 @@ async fn handle_client(
 
 async fn process_request(
     client_socket: &mut TcpStream,
-    configs: &[ClientConfig],
     expose_version: bool,
+    search_router: Arc<SearchRouter>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client_ip = client_socket
         .peer_addr()
@@ -108,7 +112,7 @@ async fn process_request(
                     max_buf as usize,
                     &client_ip,
                     expose_version,
-                    configs,
+                    search_router,
                 ),
             )
             .await
@@ -118,7 +122,7 @@ async fn process_request(
             max_buf as usize,
             &client_ip,
             expose_version,
-            configs,
+            search_router,
         )
         .await),
     };
@@ -189,7 +193,7 @@ async fn read_request(
     max_buf: usize,
     client_ip: &str,
     expose_version: bool,
-    configs: &[ClientConfig],
+    search_router: Arc<SearchRouter>,
 ) -> Result<Option<(Vec<u8>, usize, Option<u16>)>, Box<dyn std::error::Error + Send + Sync>> {
     let mut read_bytes = 0;
     let mut buf = vec![0u8; max_buf.min(4096)];
@@ -224,10 +228,7 @@ async fn read_request(
                         .unwrap_or(&req_host)
                         .to_string();
 
-                    if let Some(target_config) = configs
-                        .iter()
-                        .find(|cfg| cfg.host.as_deref() == Some(&clean_host))
-                    {
+                    if let Some(target_config) = search_router.find(&clean_host) {
                         return Ok(Some((
                             buf,
                             read_bytes,

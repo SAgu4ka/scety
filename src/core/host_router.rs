@@ -1,4 +1,4 @@
-#![allow(unused)]
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use tracing::warn;
 
@@ -8,8 +8,12 @@ pub struct HostRouter {
     trailing_wildcards: HashMap<String, usize>,
     double_star_leading: BTreeMap<usize, HashMap<String, usize>>,
     double_star_trailing: BTreeMap<usize, HashMap<String, usize>>,
-    complex_patterns: Vec<(String, usize)>,
+    complex_patterns: Vec<(Vec<String>, usize)>,
     catch_all: Option<usize>,
+}
+
+thread_local! {
+    static MATCHES_BUF: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
 }
 
 impl HostRouter {
@@ -75,7 +79,8 @@ impl HostRouter {
             return;
         }
 
-        self.complex_patterns.push((pattern.to_string(), index));
+        let owned_labels: Vec<String> = pattern.split('.').map(String::from).collect();
+        self.complex_patterns.push((owned_labels, index));
     }
 
     pub fn matches(&self, host: &str) -> Option<usize> {
@@ -104,10 +109,18 @@ impl HostRouter {
             }
         }
         if !self.complex_patterns.is_empty() {
-            for (pattern, index) in &self.complex_patterns {
-                if dp_host_matches(pattern, host) {
-                    return Some(*index);
+            let host_labels: Vec<&str> = host.split('.').collect();
+            let result = MATCHES_BUF.with(|buf| {
+                let mut matches = buf.borrow_mut();
+                for (pattern_labels, index) in &self.complex_patterns {
+                    if dp_host_matches(pattern_labels, &host_labels, &mut matches) {
+                        return Some(*index);
+                    }
                 }
+                None
+            });
+            if result.is_some() {
+                return result;
             }
         }
         if !self.leading_wildcards.is_empty()
@@ -126,17 +139,20 @@ impl HostRouter {
     }
 }
 
-fn dp_host_matches(pattern: &str, host: &str) -> bool {
-    let pattern_labels: Vec<&str> = pattern.split('.').collect();
-    let host_labels: Vec<&str> = host.split('.').collect();
-
+fn dp_host_matches(
+    pattern_labels: &[String],
+    host_labels: &[&str],
+    matches: &mut Vec<bool>,
+) -> bool {
     let columns = host_labels.len() + 1;
+    let needed = (pattern_labels.len() + 1) * columns;
 
-    let mut matches = vec![false; (pattern_labels.len() + 1) * columns];
+    matches.clear();
+    matches.resize(needed, false);
     matches[0] = true;
 
     for pattern_pos in 1..=pattern_labels.len() {
-        let current_pattern_label = pattern_labels[pattern_pos - 1];
+        let current_pattern_label = &pattern_labels[pattern_pos - 1];
 
         for host_pos in 0..=host_labels.len() {
             let index = pattern_pos * columns + host_pos;
