@@ -31,6 +31,14 @@ listen_port = 80
 [upstream]
 port = 3000
 ```
+## Wildcards
+!!IT'S NOT DONE YET, IT'S A BLANK
+Scety features a flexible routing engine that supports both single-level and multi-level wildcards:
+
+* **`*` (Single-level):** Matches exactly one domain segment. For example, `*.example.com` matches `api.example.com`, but will **not** match `v1.api.example.com`.
+* **`**` (Multi-level):** Matches one or more domain segments recursively. For example, `**.example.com` successfully matches both `api.example.com` and `v1.dev.api.example.com`.
+
+> 🚀 **What makes Scety different:** Unlike traditional reverse proxies which restrict wildcards to the edges of a host string (e.g., only at the very beginning or end), Scety's routing engine can handle complex masks with `*` and `**` embedded **anywhere** within the pattern (e.g., `api.*.internal.**`).
 
 ## Commands
 

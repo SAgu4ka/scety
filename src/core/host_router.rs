@@ -1,13 +1,13 @@
 #![allow(unused)]
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use tracing::warn;
 
 pub struct HostRouter {
     exact_matches: HashMap<String, usize>,
     leading_wildcards: HashMap<String, usize>,
     trailing_wildcards: HashMap<String, usize>,
-    double_star_leading: HashMap<usize, HashMap<String, usize>>,
-    double_star_trailing: HashMap<usize, HashMap<String, usize>>,
+    double_star_leading: BTreeMap<usize, HashMap<String, usize>>,
+    double_star_trailing: BTreeMap<usize, HashMap<String, usize>>,
     complex_patterns: Vec<(String, usize)>,
     catch_all: Option<usize>,
 }
@@ -18,8 +18,8 @@ impl HostRouter {
             exact_matches: HashMap::new(),
             leading_wildcards: HashMap::new(),
             trailing_wildcards: HashMap::new(),
-            double_star_leading: HashMap::new(),
-            double_star_trailing: HashMap::new(),
+            double_star_leading: BTreeMap::new(),
+            double_star_trailing: BTreeMap::new(),
             complex_patterns: Vec::new(),
             catch_all: None,
         }
@@ -86,7 +86,7 @@ impl HostRouter {
         }
         if !self.double_star_leading.is_empty() || !self.double_star_trailing.is_empty() {
             let host_labels: Vec<&str> = host.split('.').collect();
-            for (&count, known_map) in &self.double_star_leading {
+            for (&count, known_map) in self.double_star_leading.iter().rev() {
                 if host_labels.len() >= count {
                     let candidate = host_labels[host_labels.len() - count..].join(".");
                     if let Some(&index) = known_map.get(&candidate) {
@@ -94,7 +94,7 @@ impl HostRouter {
                     }
                 }
             }
-            for (&count, known_map) in &self.double_star_trailing {
+            for (&count, known_map) in self.double_star_trailing.iter().rev() {
                 if host_labels.len() >= count {
                     let candidate = host_labels[..count].join(".");
                     if let Some(&index) = known_map.get(&candidate) {
