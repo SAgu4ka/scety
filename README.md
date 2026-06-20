@@ -40,6 +40,20 @@ Scety features a flexible routing engine that supports both single-level and mul
 
 > 🚀 **What makes Scety different:** Unlike traditional reverse proxies which restrict wildcards to the edges of a host string (e.g., only at the very beginning or end), Scety's routing engine can handle complex masks with `*` and `**` embedded **anywhere** within the pattern (e.g., `api.*.internal.**`).
 
+### Lookup performance
+
+Not all wildcard patterns cost the same. Scety classifies every pattern once, at config-load time, and routes lookups through the cheapest applicable strategy:
+
+| Pattern type | Example | Lookup cost |
+|---|---|---|
+| Exact host | `example.com` | `O(1)` — hash map lookup |
+| Edge wildcard (`*`) | `*.example.com`, `www.example.*` | `O(1)` — hash map lookup |
+| Edge wildcard (`**`) | `**.example.com`, `foo.styles.**` | `O(k)` — k = number of distinct known-label counts registered |
+| Catch-all | `*`, `**` | `O(1)` — single fallback lookup |
+| Mixed / mid-string wildcard | `api.*.internal.**` | `O(P × H)` — dynamic-programming match against pattern length P and host length H |
+
+In practice, almost every real-world config falls into the first three rows, all of which resolve in constant time. The dynamic-programming path only runs for patterns that mix `*`/`**` away from the edges — flexible, but the most expensive option, so use it sparingly if you're routing high request volumes.
+
 ## Commands
 
 | Command | Description |
