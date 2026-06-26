@@ -19,6 +19,8 @@ pub struct ClientConfig {
     #[serde(flatten)]
     pub upstreams: HashMap<String, UpstreamConfig>,
     pub ssl: Option<SslConfig>,
+    #[serde(flatten)]
+    pub ssl_ports: HashMap<String, SslConfig>,
     pub headers: Option<HeadersConfig>,
 }
 
@@ -31,8 +33,12 @@ pub struct UpstreamConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct SslConfig {
-    pub cert: String,
-    pub key: String,
+    pub cert: Option<String>,
+    pub key: Option<String>,
+    pub acme: Option<bool>,
+    pub acme_email: Option<String>,
+    pub acme_domains: Option<Vec<String>>,
+    pub acme_cache: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -147,5 +153,111 @@ pub fn validate_config(config: &ClientConfig) -> Result<(), String> {
         check_upstream(upstream).map_err(|e| format!("[{}]: {}", key, e))?;
     }
 
+    if let Some(ports) = &config.listens_port {
+        for (key, ssl) in &config.ssl_ports {
+            if let Some(port_str) = key.strip_prefix("ssl_") {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    if !ports.contains(&port) {
+                        return Err(format!(
+                            "[{}] found, but port {} is not in listens_port={:?}",
+                            key, port, ports
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    let check_ssl = |ssl: &SslConfig| -> Result<(), String> {
+        let is_acme = ssl.acme.unwrap_or(false);
+        if is_acme {
+            if ssl.acme_email.is_none() {
+                return Err("acme=true requires acme_email".to_string());
+            }
+            if ssl.acme_domains.is_none() {
+                return Err("acme=true requires acme_domains".to_string());
+            }
+        } else {
+            if ssl.cert.is_none() || ssl.key.is_none() {
+                return Err("SSL requires either acme=true or both cert and key".to_string());
+            }
+        }
+        Ok(())
+    };
+
+    if let Some(ssl) = &config.ssl {
+        check_ssl(ssl)?;
+    }
+    for (key, ssl) in &config.ssl_ports {
+        check_ssl(ssl).map_err(|e| format!("[{}]: {}", key, e))?;
+    }
+
     Ok(())
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+
+//     fn base_config() -> ClientConfig {
+//         ClientConfig {
+//             mode: "proxy".to_string(),
+//             host: Some("example.com".to_string()),
+//             hosts: None,
+//             listen_port: Some(80),
+//             listens_port: None,
+//             upstream: Some(UpstreamConfig {
+//                 port: Some(3000),
+//                 ports: None,
+//                 service_timeout: None,
+//             }),
+//             upstreams: HashMap::new(),
+//             ssl: None,
+//             headers: None,
+//         }
+//     }
+
+//     #[test]
+//     fn valid_config_passes() {
+//         assert!(validate_config(&base_config()).is_ok());
+//     }
+
+//     #[test]
+//     fn missing_host_and_hosts_fails() {
+//         let mut c = base_config();
+//         c.host = None;
+//         assert!(validate_config(&c).is_err());
+//     }
+
+//     #[test]
+//     fn both_host_and_hosts_fails() {
+//         let mut c = base_config();
+//         c.hosts = Some(vec!["other.com".to_string()]);
+//         assert!(validate_config(&c).is_err());
+//     }
+
+//     #[test]
+//     fn missing_listen_port_fails() {
+//         let mut c = base_config();
+//         c.listen_port = None;
+//         assert!(validate_config(&c).is_err());
+//     }
+
+//     #[test]
+//     fn missing_upstream_fails() {
+//         let mut c = base_config();
+//         c.upstream = None;
+//         assert!(validate_config(&c).is_err());
+//     }
+
+//     #[test]
+//     fn upstream_with_both_port_and_ports_fails() {
+//         let mut c = base_config();
+//         c.upstream = Some(UpstreamConfig {
+//             port: Some(3000),
+//             ports: Some(vec![3001]),
+//             service_timeout: None,
+//         });
+//         assert!(validate_config(&c).is_err());
+//     }
+// }

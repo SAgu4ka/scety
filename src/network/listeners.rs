@@ -3,12 +3,15 @@ use crate::config::get_services_config::ClientConfig;
 use crate::core::search_router::SearchRouter;
 use crate::http::error_pages::send;
 use crate::network::ip_limit;
+use futures::StreamExt;
 use httparse::{EMPTY_HEADER, Request, Status};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
+use tokio_rustls_acme::AcmeConfig;
+use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
@@ -252,6 +255,53 @@ async fn read_request(
             Err(e) => {
                 error!(error=%e, "Error parsing HTTP request");
                 return Ok(None);
+            }
+        }
+    }
+}
+
+async fn start_acme_port(
+    port: u16,
+    ssl: &SslConfig,
+    all_config_for_this_port: Vec<ClientConfig>,
+    expose_version: bool,
+    token: CancellationToken,
+) {
+    let tcp_listener = match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+        Ok(l) => l,
+        Err(e) => {
+            error!(error=%e, port=%port, "Failed to bind");
+            return;
+        }
+    };
+
+    let tcp_incoming = TcpListenerStream::new(tcp_listener);
+
+    let mut tls_incoming =
+        build_acme_config(ssl).incoming(tcp_incoming, vec![b"http/1.1".to_vec()]);
+
+    let search_router = Arc::new(SearchRouter::new(all_config_for_this_port));
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                info!(port=%port, "ACME listener shutting down");
+                break;
+            }
+            item = tls_incoming.next() => {
+                match item {
+                    None => break,
+                    Some(Err(e)) => {
+                        error!(error=%e, "ACME/TLS error");
+                    }
+                    Some(Ok(tls_stream)) => {
+                        let router = Arc::clone(&search_router);
+                        let child  = token.child_token();
+                        tokio::spawn(async move {
+                            handle_tls_client(tls_stream, expose_version, child, router).await;
+                        });
+                    }
+                }
             }
         }
     }

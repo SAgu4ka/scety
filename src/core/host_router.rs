@@ -178,3 +178,117 @@ fn dp_host_matches(
 
     matches[pattern_labels.len() * columns + host_labels.len()]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn router_with(patterns: &[(&str, usize)]) -> HostRouter {
+        let mut r = HostRouter::new();
+        for (pat, idx) in patterns {
+            r.add_pattern(pat, *idx);
+        }
+        r
+    }
+
+    // --- Точное совпадение ---
+
+    #[test]
+    fn exact_match() {
+        let r = router_with(&[("example.com", 0)]);
+        assert_eq!(r.matches("example.com"), Some(0));
+    }
+
+    #[test]
+    fn exact_no_match() {
+        let r = router_with(&[("example.com", 0)]);
+        assert_eq!(r.matches("other.com"), None);
+    }
+
+    // --- Одиночный wildcard * ---
+
+    #[test]
+    fn leading_wildcard_matches() {
+        let r = router_with(&[("*.example.com", 0)]);
+        assert_eq!(r.matches("api.example.com"), Some(0));
+        assert_eq!(r.matches("www.example.com"), Some(0));
+    }
+
+    #[test]
+    fn leading_wildcard_no_multilevel() {
+        // *.example.com НЕ должен матчить v1.api.example.com
+        let r = router_with(&[("*.example.com", 0)]);
+        assert_eq!(r.matches("v1.api.example.com"), None);
+    }
+
+    #[test]
+    fn trailing_wildcard_matches() {
+        let r = router_with(&[("api.*", 0)]);
+        assert_eq!(r.matches("api.com"), Some(0));
+        assert_eq!(r.matches("api.io"), Some(0));
+    }
+
+    // --- Двойной wildcard ** ---
+
+    #[test]
+    fn double_star_leading_matches_multilevel() {
+        let r = router_with(&[("**.example.com", 0)]);
+        assert_eq!(r.matches("api.example.com"), Some(0));
+        assert_eq!(r.matches("v1.api.example.com"), Some(0));
+        assert_eq!(r.matches("a.b.c.example.com"), Some(0));
+    }
+
+    // --- Catch-all ---
+
+    #[test]
+    fn catch_all_star() {
+        let r = router_with(&[("*", 0)]);
+        assert_eq!(r.matches("anything.com"), Some(0));
+        assert_eq!(r.matches("totally.random.host"), Some(0));
+    }
+
+    #[test]
+    fn catch_all_double_star() {
+        let r = router_with(&[("**", 0)]);
+        assert_eq!(r.matches("foo.bar.baz"), Some(0));
+    }
+
+    // --- Приоритет: точное совпадение над wildcard ---
+
+    #[test]
+    fn exact_beats_wildcard() {
+        let r = router_with(&[
+            ("*.example.com", 0),   // wildcard — индекс 0
+            ("api.example.com", 1), // точный — индекс 1
+        ]);
+        // Точное совпадение должно побеждать
+        assert_eq!(r.matches("api.example.com"), Some(1));
+        // Для остальных — wildcard
+        assert_eq!(r.matches("www.example.com"), Some(0));
+    }
+
+    // --- Сложные паттерны (DP путь) ---
+
+    #[test]
+    fn complex_pattern_mid_wildcard() {
+        let r = router_with(&[("api.*.internal", 0)]);
+        assert_eq!(r.matches("api.dev.internal"), Some(0));
+        assert_eq!(r.matches("api.prod.internal"), Some(0));
+        assert_eq!(r.matches("api.internal"), None); // * требует ровно один сегмент
+    }
+
+    #[test]
+    fn complex_pattern_no_match() {
+        let r = router_with(&[("api.*.internal.**", 0)]);
+        assert_eq!(r.matches("api.dev.internal.corp.local"), Some(0));
+        assert_eq!(r.matches("other.dev.internal.corp"), None);
+    }
+
+    // --- None когда пусто ---
+
+    #[test]
+    fn empty_router_returns_none() {
+        let r = HostRouter::new();
+        assert_eq!(r.matches("example.com"), None);
+    }
+}
