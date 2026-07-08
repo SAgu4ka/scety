@@ -1,5 +1,4 @@
 use crate::config::get_services_config::SslConfig;
-use rustls_acme::{AcmeConfig, caches::DirCache};
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::fs::File;
 use std::io::BufReader;
@@ -50,7 +49,9 @@ fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>, Box<dyn std::e
     Ok(PrivateKeyDer::Pkcs8(key))
 }
 
-pub fn build_acme_config(ssl: &SslConfig) -> AcmeConfig<Box<dyn std::fmt::Debug>> {
+pub fn build_acme_config(
+    ssl: &SslConfig,
+) -> tokio_rustls_acme::AcmeConfig<std::io::Error, std::io::Error> {
     let email = ssl.acme_email.clone().unwrap_or_default();
     let domains = ssl.acme_domains.clone().unwrap_or_default();
     let cache = ssl
@@ -60,7 +61,7 @@ pub fn build_acme_config(ssl: &SslConfig) -> AcmeConfig<Box<dyn std::fmt::Debug>
 
     info!(domains=?domains, email=%email, cache=%cache, "Setting up ACME");
 
-    AcmeConfig::new(domains)
+    tokio_rustls_acme::AcmeConfig::new(domains)
         .contact_push(format!("mailto:{}", email))
-        .cache_with_boxed_err(DirCache::new(cache))
+        .cache(tokio_rustls_acme::caches::DirCache::new(cache))
 }

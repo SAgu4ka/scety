@@ -21,7 +21,6 @@ smallvec = "1.15.2"
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
 tokio-rustls-acme = "0.9"
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["net"] }
 futures = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-rustls-acme = "0.15.3"

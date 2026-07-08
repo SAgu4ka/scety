@@ -155,15 +155,14 @@ pub fn validate_config(config: &ClientConfig) -> Result<(), String> {
 
     if let Some(ports) = &config.listens_port {
         for (key, ssl) in &config.ssl_ports {
-            if let Some(port_str) = key.strip_prefix("ssl_") {
-                if let Ok(port) = port_str.parse::<u16>() {
-                    if !ports.contains(&port) {
-                        return Err(format!(
-                            "[{}] found, but port {} is not in listens_port={:?}",
-                            key, port, ports
-                        ));
-                    }
-                }
+            if let Some(port_str) = key.strip_prefix("ssl_")
+                && let Ok(port) = port_str.parse::<u16>()
+                && !ports.contains(&port)
+            {
+                return Err(format!(
+                    "[{}] found, but port {} is not in listens_port={:?}",
+                    key, port, ports
+                ));
             }
         }
     }

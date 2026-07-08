@@ -50,6 +50,7 @@ mod tests {
             }),
             upstreams: HashMap::new(),
             ssl: None,
+            ssl_ports: HashMap::new(),
             headers: None,
         }
     }

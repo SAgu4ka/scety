@@ -1,27 +1,59 @@
 use crate::config::get_scety_config::scety_config;
-use crate::config::get_services_config::ClientConfig;
+use crate::config::get_services_config::{ClientConfig, SslConfig};
 use crate::core::search_router::SearchRouter;
 use crate::http::error_pages::send;
 use crate::network::ip_limit;
+use crate::network::tls::{build_acme_config, load_manual_tls};
 use futures::StreamExt;
 use httparse::{EMPTY_HEADER, Request, Status};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
-use tokio_rustls_acme::AcmeConfig;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
+
+pub enum SslMode {
+    None,
+    Manual(SslConfig),
+    Acme(SslConfig),
+}
 
 pub async fn start_listen_port(
     port: u16,
     all_config_for_this_port: Vec<ClientConfig>,
     expose_version: bool,
+    ssl_mode: SslMode,
     token: CancellationToken,
 ) {
-    info!(port=%port, "Start listen port");
+    let search_router = Arc::new(SearchRouter::new(all_config_for_this_port));
+
+    match ssl_mode {
+        SslMode::None => start_plain_port(port, search_router, expose_version, token).await,
+        SslMode::Manual(ssl) => {
+            start_manual_tls_port(port, &ssl, search_router, expose_version, token).await
+        }
+        SslMode::Acme(ssl) => {
+            start_acme_port(port, &ssl, search_router, expose_version, token).await
+        }
+    }
+}
+
+fn check_ip_limit(ip: IpAddr) -> Result<ip_limit::ConnectionGuard, ()> {
+    let limit = scety_config().ip_limitation.unwrap_or(20);
+    ip_limit::try_acquire(ip, limit)
+}
+
+async fn start_plain_port(
+    port: u16,
+    search_router: Arc<SearchRouter>,
+    expose_version: bool,
+    token: CancellationToken,
+) {
+    info!(port=%port, "Start listen port (plain)");
     let tcp_listener = match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
         Ok(listener) => listener,
         Err(e) => {
@@ -29,8 +61,6 @@ pub async fn start_listen_port(
             return;
         }
     };
-
-    let search_router = Arc::new(SearchRouter::new(all_config_for_this_port));
 
     loop {
         tokio::select! {
@@ -45,7 +75,7 @@ pub async fn start_listen_port(
                         debug!(client_ip=%addr, "New client connection");
 
                         let limit = scety_config().ip_limitation.unwrap_or(20);
-                        let guard = match ip_limit::try_acquire(addr.ip(), limit) {
+                        let guard = match check_ip_limit(addr.ip()) {
                             Ok(guard) => guard,
                             Err(()) => {
                                 debug!(client_ip=%addr, limit=%limit, "Connection limit reached for this IP");
@@ -59,14 +89,134 @@ pub async fn start_listen_port(
 
                         let child = token.child_token();
                         let search_router = Arc::clone(&search_router);
+                        let client_ip = addr.to_string();
 
                         tokio::spawn(async move {
                             let _guard = guard;
-                            handle_client(socket, expose_version, child, search_router).await
+                            handle_client(socket, client_ip, expose_version, child, search_router).await
                         });
                     }
-                    Err(e) => {
-                        error!(error=%e, port=%port, "Error listening port")
+                    Err(e) => error!(error=%e, port=%port, "Error listening port"),
+                }
+            }
+        }
+    }
+}
+
+async fn start_manual_tls_port(
+    port: u16,
+    ssl: &SslConfig,
+    search_router: Arc<SearchRouter>,
+    expose_version: bool,
+    token: CancellationToken,
+) {
+    info!(port=%port, "Start listen port (manual TLS)");
+
+    let acceptor = match load_manual_tls(ssl) {
+        Ok(a) => a,
+        Err(e) => {
+            error!(error=%e, port=%port, "Failed to load TLS certificate/key");
+            return;
+        }
+    };
+
+    let tcp_listener = match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            error!(error=%e, port=%port, "Error in starting listen port");
+            return;
+        }
+    };
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                info!(port=%port, "TLS listener shutting down");
+                break;
+            }
+
+            result = tcp_listener.accept() => {
+                match result {
+                    Ok((socket, addr)) => {
+                        debug!(client_ip=%addr, "New TLS client connection");
+
+                        let guard = match check_ip_limit(addr.ip()) {
+                            Ok(guard) => guard,
+                            Err(()) => {
+                                debug!(client_ip=%addr, "Connection limit reached for this IP");
+                                continue;
+                            }
+                        };
+
+                        let acceptor = acceptor.clone();
+                        let child = token.child_token();
+                        let search_router = Arc::clone(&search_router);
+                        let client_ip = addr.to_string();
+
+                        tokio::spawn(async move {
+                            let _guard = guard;
+                            match acceptor.accept(socket).await {
+                                Ok(tls_stream) => {
+                                    let _ = handle_client(tls_stream, client_ip, expose_version, child, search_router).await;
+                                }
+                                Err(e) => {
+                                    error!(error=%e, client_ip=%client_ip, "TLS handshake failed");
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => error!(error=%e, port=%port, "Error listening port"),
+                }
+            }
+        }
+    }
+}
+
+async fn start_acme_port(
+    port: u16,
+    ssl: &SslConfig,
+    search_router: Arc<SearchRouter>,
+    expose_version: bool,
+    token: CancellationToken,
+) {
+    info!(port=%port, "Start listen port (ACME TLS)");
+
+    let tcp_listener = match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+        Ok(l) => l,
+        Err(e) => {
+            error!(error=%e, port=%port, "Failed to bind");
+            return;
+        }
+    };
+
+    let tcp_incoming = TcpListenerStream::new(tcp_listener);
+    let mut tls_incoming =
+        build_acme_config(ssl).incoming(tcp_incoming, vec![b"http/1.1".to_vec()]);
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                info!(port=%port, "ACME listener shutting down");
+                break;
+            }
+            item = tls_incoming.next() => {
+                match item {
+                    None => break,
+                    Some(Err(e)) => {
+                        error!(error=%e, "ACME/TLS error");
+                    }
+                    Some(Ok(tls_stream)) => {
+                        let client_ip = tls_stream
+                            .get_ref().0
+                            .peer_addr()
+                            .map(|addr| addr.to_string())
+                            .unwrap_or_else(|_| "Unknown".to_string());
+
+                        let router = Arc::clone(&search_router);
+                        let child = token.child_token();
+                        tokio::spawn(async move {
+                            let _ = handle_client(tls_stream, client_ip, expose_version, child, router).await;
+                        });
                     }
                 }
             }
@@ -74,12 +224,16 @@ pub async fn start_listen_port(
     }
 }
 
-async fn handle_client(
-    mut client_socket: TcpStream,
+async fn handle_client<S>(
+    mut client_socket: S,
+    client_ip: String,
     expose_version: bool,
     token: CancellationToken,
     search_router: Arc<SearchRouter>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
     debug!("Starting client connection processing");
 
     tokio::select! {
@@ -87,22 +241,21 @@ async fn handle_client(
             send(&mut client_socket, 503, expose_version).await.ok();
             Ok(())
         }
-        result = process_request(&mut client_socket, expose_version, search_router) => {
+        result = process_request(&mut client_socket, &client_ip, expose_version, search_router) => {
             result
         }
     }
 }
 
-async fn process_request(
-    client_socket: &mut TcpStream,
+async fn process_request<S>(
+    client_socket: &mut S,
+    client_ip: &str,
     expose_version: bool,
     search_router: Arc<SearchRouter>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client_ip = client_socket
-        .peer_addr()
-        .map(|a| a.to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
-
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
     let client_timeout = scety_config().client_timeout;
     let max_buf = scety_config().client_header_buffer.unwrap();
 
@@ -113,7 +266,7 @@ async fn process_request(
                 read_request(
                     client_socket,
                     max_buf as usize,
-                    &client_ip,
+                    client_ip,
                     expose_version,
                     search_router,
                 ),
@@ -123,7 +276,7 @@ async fn process_request(
         None => Ok(read_request(
             client_socket,
             max_buf as usize,
-            &client_ip,
+            client_ip,
             expose_version,
             search_router,
         )
@@ -191,13 +344,16 @@ async fn process_request(
     }
 }
 
-async fn read_request(
-    client_socket: &mut TcpStream,
+async fn read_request<S>(
+    client_socket: &mut S,
     max_buf: usize,
     client_ip: &str,
     expose_version: bool,
     search_router: Arc<SearchRouter>,
-) -> Result<Option<(Vec<u8>, usize, Option<u16>)>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Option<(Vec<u8>, usize, Option<u16>)>, Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
     let mut read_bytes = 0;
     let mut buf = vec![0u8; max_buf.min(4096)];
     loop {
@@ -255,53 +411,6 @@ async fn read_request(
             Err(e) => {
                 error!(error=%e, "Error parsing HTTP request");
                 return Ok(None);
-            }
-        }
-    }
-}
-
-async fn start_acme_port(
-    port: u16,
-    ssl: &SslConfig,
-    all_config_for_this_port: Vec<ClientConfig>,
-    expose_version: bool,
-    token: CancellationToken,
-) {
-    let tcp_listener = match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
-        Ok(l) => l,
-        Err(e) => {
-            error!(error=%e, port=%port, "Failed to bind");
-            return;
-        }
-    };
-
-    let tcp_incoming = TcpListenerStream::new(tcp_listener);
-
-    let mut tls_incoming =
-        build_acme_config(ssl).incoming(tcp_incoming, vec![b"http/1.1".to_vec()]);
-
-    let search_router = Arc::new(SearchRouter::new(all_config_for_this_port));
-
-    loop {
-        tokio::select! {
-            _ = token.cancelled() => {
-                info!(port=%port, "ACME listener shutting down");
-                break;
-            }
-            item = tls_incoming.next() => {
-                match item {
-                    None => break,
-                    Some(Err(e)) => {
-                        error!(error=%e, "ACME/TLS error");
-                    }
-                    Some(Ok(tls_stream)) => {
-                        let router = Arc::clone(&search_router);
-                        let child  = token.child_token();
-                        tokio::spawn(async move {
-                            handle_tls_client(tls_stream, expose_version, child, router).await;
-                        });
-                    }
-                }
             }
         }
     }
