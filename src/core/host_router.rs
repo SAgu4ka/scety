@@ -8,6 +8,9 @@ pub struct HostRouter {
     trailing_wildcards: HashMap<String, usize>,
     double_star_leading: BTreeMap<usize, HashMap<String, usize>>,
     double_star_trailing: BTreeMap<usize, HashMap<String, usize>>,
+    simple_internal_wildcards: Vec<(Vec<String>, Vec<String>, usize)>,
+    internal_double_star_wildcards: Vec<(Vec<String>, Vec<String>, usize)>,
+    multi_single_wildcards: Vec<(Vec<String>, usize)>,
     complex_patterns: Vec<(Vec<String>, usize)>,
     catch_all: Option<usize>,
 }
@@ -24,6 +27,9 @@ impl HostRouter {
             trailing_wildcards: HashMap::new(),
             double_star_leading: BTreeMap::new(),
             double_star_trailing: BTreeMap::new(),
+            simple_internal_wildcards: Vec::new(),
+            internal_double_star_wildcards: Vec::new(),
+            multi_single_wildcards: Vec::new(),
             complex_patterns: Vec::new(),
             catch_all: None,
         }
@@ -79,6 +85,53 @@ impl HostRouter {
             return;
         }
 
+        let single_wildcard_count = labels.iter().filter(|label| **label == "*").count();
+        if single_wildcard_count == 1 && labels.iter().all(|label| *label != "**") {
+            let wildcard_pos = labels.iter().position(|label| *label == "*");
+            if let Some(pos) = wildcard_pos
+                && pos > 0
+                && pos < labels.len() - 1
+            {
+                let prefix_labels = labels[..pos]
+                    .iter()
+                    .map(|label| label.to_string())
+                    .collect();
+                let suffix_labels = labels[pos + 1..]
+                    .iter()
+                    .map(|label| label.to_string())
+                    .collect();
+                self.simple_internal_wildcards
+                    .push((prefix_labels, suffix_labels, index));
+                return;
+            }
+        }
+
+        if single_wildcard_count > 1 && labels.iter().all(|label| *label != "**") {
+            let owned_labels: Vec<String> = labels.iter().map(|label| label.to_string()).collect();
+            self.multi_single_wildcards.push((owned_labels, index));
+            return;
+        }
+
+        if labels.contains(&"**") {
+            let double_star_pos = labels.iter().position(|label| *label == "**");
+            if let Some(pos) = double_star_pos
+                && pos > 0
+                && pos < labels.len() - 1
+            {
+                let prefix_labels = labels[..pos]
+                    .iter()
+                    .map(|label| label.to_string())
+                    .collect();
+                let suffix_labels = labels[pos + 1..]
+                    .iter()
+                    .map(|label| label.to_string())
+                    .collect();
+                self.internal_double_star_wildcards
+                    .push((prefix_labels, suffix_labels, index));
+                return;
+            }
+        }
+
         let owned_labels: Vec<String> = pattern.split('.').map(String::from).collect();
         self.complex_patterns.push((owned_labels, index));
     }
@@ -105,6 +158,29 @@ impl HostRouter {
                     if let Some(&index) = known_map.get(&candidate) {
                         return Some(index);
                     }
+                }
+            }
+        }
+        if !self.simple_internal_wildcards.is_empty()
+            || !self.internal_double_star_wildcards.is_empty()
+        {
+            let host_labels: Vec<&str> = host.split('.').collect();
+            for (prefix_labels, suffix_labels, index) in &self.simple_internal_wildcards {
+                if matches_single_internal_wildcard(prefix_labels, suffix_labels, &host_labels) {
+                    return Some(*index);
+                }
+            }
+            for (prefix_labels, suffix_labels, index) in &self.internal_double_star_wildcards {
+                if matches_internal_double_star(prefix_labels, suffix_labels, &host_labels) {
+                    return Some(*index);
+                }
+            }
+        }
+        if !self.multi_single_wildcards.is_empty() {
+            let host_labels: Vec<&str> = host.split('.').collect();
+            for (pattern_labels, index) in &self.multi_single_wildcards {
+                if matches_multi_single_wildcard(pattern_labels, &host_labels) {
+                    return Some(*index);
                 }
             }
         }
@@ -137,6 +213,65 @@ impl HostRouter {
         }
         self.catch_all
     }
+}
+
+fn matches_single_internal_wildcard(
+    prefix_labels: &[String],
+    suffix_labels: &[String],
+    host_labels: &[&str],
+) -> bool {
+    if prefix_labels.len() + 1 + suffix_labels.len() != host_labels.len() {
+        return false;
+    }
+
+    let prefix_matches = prefix_labels
+        .iter()
+        .zip(host_labels.iter())
+        .all(|(expected, actual)| expected == actual);
+    let suffix_matches = suffix_labels
+        .iter()
+        .zip(host_labels[prefix_labels.len() + 1..].iter())
+        .all(|(expected, actual)| expected == actual);
+
+    prefix_matches && suffix_matches
+}
+
+fn matches_internal_double_star(
+    prefix_labels: &[String],
+    suffix_labels: &[String],
+    host_labels: &[&str],
+) -> bool {
+    if prefix_labels.len() + suffix_labels.len() > host_labels.len() {
+        return false;
+    }
+
+    let start = prefix_labels.len();
+    let end = host_labels.len() - suffix_labels.len();
+    if start > end {
+        return false;
+    }
+
+    let prefix_matches = prefix_labels
+        .iter()
+        .zip(host_labels.iter())
+        .all(|(expected, actual)| expected == actual);
+    let suffix_matches = suffix_labels
+        .iter()
+        .zip(host_labels[end..].iter())
+        .all(|(expected, actual)| expected == actual);
+
+    prefix_matches && suffix_matches
+}
+
+fn matches_multi_single_wildcard(pattern_labels: &[String], host_labels: &[&str]) -> bool {
+    if pattern_labels.len() != host_labels.len() {
+        return false;
+    }
+
+    pattern_labels
+        .iter()
+        .zip(host_labels.iter())
+        .all(|(pattern_label, host_label)| pattern_label == "*" || pattern_label == host_label)
 }
 
 fn dp_host_matches(
@@ -282,6 +417,24 @@ mod tests {
         let r = router_with(&[("api.*.internal.**", 0)]);
         assert_eq!(r.matches("api.dev.internal.corp.local"), Some(0));
         assert_eq!(r.matches("other.dev.internal.corp"), None);
+    }
+
+    #[test]
+    fn simple_internal_wildcard_matches_single_label_between() {
+        let r = router_with(&[("example.*.com", 0)]);
+        assert_eq!(r.matches("example.foo.com"), Some(0));
+        assert_eq!(r.matches("example.bar.com"), Some(0));
+        assert_eq!(r.matches("example.com"), None);
+        assert_eq!(r.matches("foo.example.com"), None);
+    }
+
+    #[test]
+    fn complex_internal_double_star_matches_multiple_labels_between() {
+        let r = router_with(&[("example.**.com", 0)]);
+        assert_eq!(r.matches("example.com"), Some(0));
+        assert_eq!(r.matches("example.foo.com"), Some(0));
+        assert_eq!(r.matches("example.foo.bar.com"), Some(0));
+        assert_eq!(r.matches("foo.example.com"), None);
     }
 
     // --- None когда пусто ---
