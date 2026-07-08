@@ -24,3 +24,4 @@ tokio-rustls-acme = "0.9"
 tokio-stream = { version = "0.1", features = ["net"] }
 futures = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+lru = "0.12"

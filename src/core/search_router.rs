@@ -1,13 +1,13 @@
 use crate::config::get_services_config::ClientConfig;
 use crate::core::host_router::HostRouter;
-use std::collections::{HashMap, VecDeque};
+use lru::LruCache;
+use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
 pub struct SearchRouter {
     router: HostRouter,
     configs: Vec<ClientConfig>,
-    cache: Mutex<HashMap<String, Option<usize>>>,
-    cache_order: Mutex<VecDeque<String>>,
+    cache: Mutex<LruCache<String, Option<usize>>>,
     cache_capacity: usize,
 }
 
@@ -29,8 +29,9 @@ impl SearchRouter {
         Self {
             router,
             configs,
-            cache: Mutex::new(HashMap::new()),
-            cache_order: Mutex::new(VecDeque::new()),
+            cache: Mutex::new(LruCache::new(
+                NonZeroUsize::new(128).expect("cache capacity must be non-zero"),
+            )),
             cache_capacity: 128,
         }
     }
@@ -40,52 +41,15 @@ impl SearchRouter {
     }
 
     fn find_with_cache(&self, host: &str) -> Option<&ClientConfig> {
-        {
-            let cache = self.cache.lock().expect("cache lock poisoned");
-            let mut order = self.cache_order.lock().expect("cache order lock poisoned");
-            if let Some(cached_index) = cache.get(host).copied() {
-                self.touch_order(host, &mut order);
-                return cached_index.and_then(|index| self.configs.get(index));
-            }
+        let mut cache = self.cache.lock().expect("cache lock poisoned");
+        if let Some(cached_index) = cache.get(host).copied() {
+            return cached_index.and_then(|index| self.configs.get(index));
         }
 
         let resolved_index = self.router.matches(host);
-        {
-            let mut cache = self.cache.lock().expect("cache lock poisoned");
-            let mut order = self.cache_order.lock().expect("cache order lock poisoned");
-            self.insert_cache_entry(host, resolved_index, &mut cache, &mut order);
-        }
+        cache.put(host.to_string(), resolved_index);
 
         resolved_index.and_then(|index| self.configs.get(index))
-    }
-
-    fn touch_order(&self, host: &str, order: &mut VecDeque<String>) {
-        if let Some(pos) = order.iter().position(|entry| entry == host) {
-            order.remove(pos);
-        }
-        order.push_back(host.to_string());
-    }
-
-    fn insert_cache_entry(
-        &self,
-        host: &str,
-        index: Option<usize>,
-        cache: &mut HashMap<String, Option<usize>>,
-        order: &mut VecDeque<String>,
-    ) {
-        if cache.contains_key(host) {
-            self.touch_order(host, order);
-        } else {
-            if cache.len() >= self.cache_capacity
-                && let Some(oldest) = order.pop_front()
-            {
-                cache.remove(&oldest);
-            }
-
-            order.push_back(host.to_string());
-        }
-
-        cache.insert(host.to_string(), index);
     }
 }
 
@@ -93,6 +57,9 @@ impl SearchRouter {
     #[allow(dead_code)]
     pub fn with_cache_capacity(mut self, capacity: usize) -> Self {
         self.cache_capacity = capacity;
+        self.cache = Mutex::new(LruCache::new(
+            NonZeroUsize::new(capacity).expect("cache capacity must be non-zero"),
+        ));
         self
     }
 }
@@ -102,6 +69,7 @@ mod tests {
     use super::*;
     use crate::config::get_services_config::{ClientConfig, UpstreamConfig};
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn make_config(host: &str, upstream_port: u16) -> ClientConfig {
         ClientConfig {
@@ -168,5 +136,66 @@ mod tests {
             Some(4000)
         );
         assert!(router.find("missing.example.com").is_none());
+    }
+
+    #[tokio::test]
+    async fn concurrent_find_calls_do_not_panic() {
+        let router = Arc::new(SearchRouter::new(vec![
+            make_config("example.com", 3000),
+            make_config("api.example.com", 4000),
+            make_config("foo.example.com", 5000),
+        ]));
+
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let router = Arc::clone(&router);
+            handles.push(tokio::spawn(async move {
+                for host in [
+                    "example.com",
+                    "api.example.com",
+                    "foo.example.com",
+                    "missing.example.com",
+                ] {
+                    let cfg = router.find(host);
+                    if host == "missing.example.com" {
+                        assert!(cfg.is_none());
+                    } else {
+                        assert!(cfg.is_some());
+                    }
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.await.expect("task panicked");
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_find_with_and_without_cache() {
+        let patterns: Vec<ClientConfig> = (0..300)
+            .map(|i| make_config(&format!("*.service{}.example.com", i), 3000 + i as u16))
+            .collect();
+
+        let router = SearchRouter::new(patterns.clone());
+        let host = "api.service150.example.com";
+
+        let start_no_cache = std::time::Instant::now();
+        for _ in 0..10_000 {
+            let _ = router.router.matches(host);
+        }
+        let elapsed_no_cache = start_no_cache.elapsed();
+
+        let start_cached = std::time::Instant::now();
+        for _ in 0..10_000 {
+            let _ = router.find(host);
+        }
+        let elapsed_cached = start_cached.elapsed();
+
+        eprintln!(
+            "no cache: {:?}, cached: {:?}",
+            elapsed_no_cache, elapsed_cached
+        );
     }
 }
