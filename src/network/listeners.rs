@@ -256,14 +256,44 @@ async fn process_request<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    let client_use_full_timeout = scety_config().client_use_full_timeout;
-    let client_full_timeout = scety_config().client_full_timeout;
-    let client_headers_timeout = scety_config().client_headers_timeout;
-    let client_body_timeout = scety_config().client_body_timeout;
+    let cfg = scety_config();
 
-    let max_buf = scety_config().client_header_buffer.unwrap();
+    if cfg.client_use_full_timeout {
+        return match cfg.client_full_timeout {
+            Some(d) => {
+                match timeout(
+                    d,
+                    process_request_inner(client_socket, client_ip, expose_version, search_router),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => {
+                        debug!(client_ip=%client_ip, "Connection closed: full timeout exceeded");
+                        Ok(())
+                    }
+                }
+            }
+            None => process_request_inner(client_socket, client_ip, expose_version, search_router).await,
+        };
+    }
 
-    let parse_result = match client_timeout {
+    process_request_inner(client_socket, client_ip, expose_version, search_router).await
+}
+
+async fn process_request_inner<S>(
+    client_socket: &mut S,
+    client_ip: &str,
+    expose_version: bool,
+    search_router: Arc<SearchRouter>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let cfg = scety_config();
+    let max_buf = cfg.client_header_buffer.unwrap();
+
+    let parse_result = match cfg.client_headers_timeout {
         Some(d) => {
             timeout(
                 d,
@@ -339,9 +369,26 @@ where
 
                     debug!(target=%target_addr, "Proxying request to upstream");
                     upstream_socket.write_all(&final_buf).await?;
-                    tokio::io::copy_bidirectional(&mut *client_socket, &mut upstream_socket)
-                        .await?;
-                    Ok(())
+
+                    let copy_fut =
+                        tokio::io::copy_bidirectional(&mut *client_socket, &mut upstream_socket);
+
+                    match scety_config().client_body_timeout {
+                        Some(d) => match timeout(d, copy_fut).await {
+                            Ok(result) => {
+                                result?;
+                                Ok(())
+                            }
+                            Err(_) => {
+                                debug!(client_ip=%client_ip, "Connection closed: body timeout exceeded");
+                                Ok(())
+                            }
+                        },
+                        None => {
+                            copy_fut.await?;
+                            Ok(())
+                        }
+                    }
                 }
             }
         }
