@@ -274,7 +274,9 @@ where
                     }
                 }
             }
-            None => process_request_inner(client_socket, client_ip, expose_version, search_router).await,
+            None => {
+                process_request_inner(client_socket, client_ip, expose_version, search_router).await
+            }
         };
     }
 

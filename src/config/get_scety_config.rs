@@ -48,15 +48,18 @@ impl ScetyConfig {
         let ip_limitation = Some(ip_limitation.unwrap_or(20));
         let client_header_buffer = Some(client_header_buffer.unwrap_or(16 * 1024));
 
-        let headers_raw = Self::parse_optional_timeout(client_headers_timeout, "client_headers_timeout");
+        let headers_raw =
+            Self::parse_optional_timeout(client_headers_timeout, "client_headers_timeout");
         let body_raw = Self::parse_optional_timeout(client_body_timeout, "client_body_timeout");
         let full_raw = Self::parse_optional_timeout(client_full_timeout, "client_full_timeout");
 
-        let (final_headers, final_body, use_full_timeout) = match (headers_raw, body_raw, full_raw) {
-
+        let (final_headers, final_body, use_full_timeout) = match (headers_raw, body_raw, full_raw)
+        {
             (Some(h), Some(b), full) => {
                 if full.is_some() {
-                    warn!("client_full_timeout игнорируется: заданы client_headers_timeout и client_body_timeout");
+                    warn!(
+                        "client_full_timeout игнорируется: заданы client_headers_timeout и client_body_timeout"
+                    );
                 }
                 (h, b, false)
             }
