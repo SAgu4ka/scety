@@ -256,7 +256,11 @@ async fn process_request<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    let client_timeout = scety_config().client_timeout;
+    let client_use_full_timeout = scety_config().client_use_full_timeout;
+    let client_full_timeout = scety_config().client_full_timeout;
+    let client_headers_timeout = scety_config().client_headers_timeout;
+    let client_body_timeout = scety_config().client_body_timeout;
+
     let max_buf = scety_config().client_header_buffer.unwrap();
 
     let parse_result = match client_timeout {

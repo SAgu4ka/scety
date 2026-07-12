@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::fs;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tracing::error;
+use tracing::{error, warn};
 
 pub static SCETY_CONFIG: OnceLock<ScetyConfig> = OnceLock::new();
 
@@ -16,7 +16,9 @@ struct TomlConfig {
 #[derive(Deserialize, Default)]
 struct LimitationSection {
     ip_limitation: Option<i32>,
-    client_timeout: Option<String>,
+    client_headers_timeout: Option<String>,
+    client_body_timeout: Option<String>,
+    client_full_timeout: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -26,36 +28,75 @@ struct LimitBuffersSection {
 
 pub struct ScetyConfig {
     pub ip_limitation: Option<i32>,
-    pub client_timeout: Option<Duration>,
+    pub client_headers_timeout: Option<Duration>,
+    pub client_body_timeout: Option<Duration>,
+    pub client_full_timeout: Option<Duration>,
+    pub client_use_full_timeout: bool,
     pub client_header_buffer: Option<i32>,
 }
 
 impl ScetyConfig {
     pub fn new(
         ip_limitation: Option<i32>,
-        client_timeout: Option<String>,
+        client_headers_timeout: Option<String>,
+        client_body_timeout: Option<String>,
+        client_full_timeout: Option<String>,
         client_header_buffer: Option<i32>,
     ) -> Self {
+        const DEFAULT: Duration = Duration::from_secs(5);
+
         let ip_limitation = Some(ip_limitation.unwrap_or(20));
-        let client_timeout = client_timeout.unwrap_or_else(|| "5s".to_string());
-
-        let client_timeout_duration = match client_timeout.trim() {
-            "-1" => None,
-            other => match humantime::parse_duration(other) {
-                Ok(d) => Some(d),
-                Err(e) => {
-                    tracing::warn!(error=%e, value=%other, "Invalid client_timeout, falling back to 5s");
-                    Some(Duration::from_secs(5))
-                }
-            },
-        };
-
         let client_header_buffer = Some(client_header_buffer.unwrap_or(16 * 1024));
+
+        let headers_raw = Self::parse_optional_timeout(client_headers_timeout, "client_headers_timeout");
+        let body_raw = Self::parse_optional_timeout(client_body_timeout, "client_body_timeout");
+        let full_raw = Self::parse_optional_timeout(client_full_timeout, "client_full_timeout");
+
+        let (final_headers, final_body, use_full_timeout) = match (headers_raw, body_raw, full_raw) {
+
+            (Some(h), Some(b), full) => {
+                if full.is_some() {
+                    warn!("client_full_timeout игнорируется: заданы client_headers_timeout и client_body_timeout");
+                }
+                (h, b, false)
+            }
+            (Some(h), None, full) => {
+                if full.is_some() {
+                    warn!("client_full_timeout игнорируется: задан client_headers_timeout");
+                }
+                (h, Some(DEFAULT), false)
+            }
+            (None, Some(b), full) => {
+                if full.is_some() {
+                    warn!("client_full_timeout игнорируется: задан client_body_timeout");
+                }
+                (Some(DEFAULT), b, false)
+            }
+            (None, None, Some(f)) => (f, f, true),
+            (None, None, None) => (Some(DEFAULT), Some(DEFAULT), false),
+        };
 
         Self {
             ip_limitation,
-            client_timeout: client_timeout_duration,
+            client_headers_timeout: final_headers,
+            client_body_timeout: final_body,
+            client_full_timeout: full_raw.flatten(),
+            client_use_full_timeout: use_full_timeout,
             client_header_buffer,
+        }
+    }
+
+    fn parse_optional_timeout(raw: Option<String>, field_name: &str) -> Option<Option<Duration>> {
+        let raw = raw?;
+        match raw.trim() {
+            "-1" => Some(None),
+            other => match humantime::parse_duration(other) {
+                Ok(d) => Some(Some(d)),
+                Err(e) => {
+                    warn!(error=%e, field=%field_name, value=%other, "Некорректное значение таймаута, использую 5s");
+                    Some(Some(Duration::from_secs(5)))
+                }
+            },
         }
     }
 }
@@ -93,7 +134,9 @@ pub fn get_scety_config() -> std::io::Result<Option<ScetyConfig>> {
 
     let config = ScetyConfig::new(
         limitation.ip_limitation,
-        limitation.client_timeout,
+        limitation.client_headers_timeout,
+        limitation.client_body_timeout,
+        limitation.client_full_timeout,
         limit_buffers.client_header,
     );
 
