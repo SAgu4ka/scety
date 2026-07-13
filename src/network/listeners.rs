@@ -355,13 +355,16 @@ where
                     Ok(())
                 }
                 Ok(Ok(mut upstream_socket)) => {
-                    let header = format!("X-Forwarded-For: {}\r\n", client_ip);
+                    let xff_ip = client_ip
+                        .rsplit_once(':')
+                        .map(|(ip, _)| ip)
+                        .unwrap_or(client_ip);
+                    let header = format!("X-Forwarded-For: {}\r\n", xff_ip);
 
                     let final_buf = if let Some(pos) =
                         buf[..read_bytes].windows(4).position(|w| w == b"\r\n\r\n")
                     {
-                        let mut new_buf = Vec::new();
-                        new_buf.extend_from_slice(&buf[..pos + 2]);
+                        let mut new_buf = strip_client_xff(&buf[..pos + 2]);
                         new_buf.extend_from_slice(header.as_bytes());
                         new_buf.extend_from_slice(&buf[pos + 2..read_bytes]);
                         new_buf
@@ -395,6 +398,20 @@ where
             }
         }
     }
+}
+
+fn strip_client_xff(head: &[u8]) -> Vec<u8> {
+    const XFF: &[u8] = b"x-forwarded-for:";
+
+    let mut out = Vec::with_capacity(head.len());
+    for line in head.split_inclusive(|&b| b == b'\n') {
+        let trimmed = line.strip_suffix(b"\r\n").unwrap_or(line);
+        let is_xff = trimmed.len() >= XFF.len() && trimmed[..XFF.len()].eq_ignore_ascii_case(XFF);
+        if !is_xff {
+            out.extend_from_slice(line);
+        }
+    }
+    out
 }
 
 async fn read_request<S>(
@@ -466,5 +483,42 @@ where
                 return Ok(None);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod xff_tests {
+    use super::strip_client_xff;
+
+    #[test]
+    fn keeps_request_line_and_other_headers_untouched() {
+        let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nUser-Agent: curl\r\n";
+        assert_eq!(strip_client_xff(raw), raw.to_vec());
+    }
+
+    #[test]
+    fn strips_single_client_supplied_header() {
+        let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nX-Forwarded-For: 1.2.3.4\r\n";
+        let expected = b"GET / HTTP/1.1\r\nHost: example.com\r\n".to_vec();
+        assert_eq!(strip_client_xff(raw), expected);
+    }
+
+    #[test]
+    fn strips_all_occurrences_regardless_of_case() {
+        let raw = b"GET / HTTP/1.1\r\nx-forwarded-for: 1.1.1.1\r\nHost: example.com\r\nX-FORWARDED-FOR: 2.2.2.2\r\n";
+        let expected = b"GET / HTTP/1.1\r\nHost: example.com\r\n".to_vec();
+        assert_eq!(strip_client_xff(raw), expected);
+    }
+
+    #[test]
+    fn does_not_touch_unrelated_headers_with_similar_prefix() {
+        let raw = b"GET / HTTP/1.1\r\nX-Forwarded-Forwarded-By: something\r\n";
+        assert_eq!(strip_client_xff(raw), raw.to_vec());
+    }
+
+    #[test]
+    fn handles_request_with_no_headers() {
+        let raw = b"GET / HTTP/1.1\r\n";
+        assert_eq!(strip_client_xff(raw), raw.to_vec());
     }
 }

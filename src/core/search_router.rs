@@ -172,7 +172,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn benchmark_find_with_and_without_cache() {
         let patterns: Vec<ClientConfig> = (0..300)
             .map(|i| make_config(&format!("*.service{}.example.com", i), 3000 + i as u16))
