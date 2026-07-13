@@ -1,6 +1,6 @@
 use crate::cli::commands::{
-    check::check, install::install, reload::reload, run::run, status::status, stop::stop,
-    uninstall::uninstall,
+    check::check, check_certs::check_certs, install::install, reload::reload, run::run,
+    status::status, stop::stop, uninstall::uninstall,
 };
 use clap::Parser;
 use cli::args::{Cli, Commands};
@@ -43,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Reload => run_command(reload).await,
         Commands::Status => run_command(status).await,
         Commands::Check => run_command(check).await,
+        Commands::CheckCerts => run_command(check_certs).await,
         Commands::Uninstall => run_command(uninstall).await,
         Commands::Install => run_command(install).await,
     }

@@ -23,5 +23,7 @@ rustls-pemfile = "2"
 tokio-rustls-acme = "0.9"
 tokio-stream = { version = "0.1", features = ["net"] }
 futures = "0.3"
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 lru = "0.12"
+x509-parser = "0.18"
+webpki-roots = "1"

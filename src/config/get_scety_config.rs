@@ -11,6 +11,12 @@ pub static SCETY_CONFIG: OnceLock<ScetyConfig> = OnceLock::new();
 struct TomlConfig {
     limitation: Option<LimitationSection>,
     limit_buffers: Option<LimitBuffersSection>,
+    tls: Option<TlsSection>,
+}
+
+#[derive(Deserialize, Default)]
+struct TlsSection {
+    trusted_ca_bundle: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -33,6 +39,7 @@ pub struct ScetyConfig {
     pub client_full_timeout: Option<Duration>,
     pub client_use_full_timeout: bool,
     pub client_header_buffer: Option<i32>,
+    pub trusted_ca_bundle: Option<String>,
 }
 
 impl ScetyConfig {
@@ -42,6 +49,7 @@ impl ScetyConfig {
         client_body_timeout: Option<String>,
         client_full_timeout: Option<String>,
         client_header_buffer: Option<i32>,
+        trusted_ca_bundle: Option<String>,
     ) -> Self {
         const DEFAULT: Duration = Duration::from_secs(5);
 
@@ -58,20 +66,20 @@ impl ScetyConfig {
             (Some(h), Some(b), full) => {
                 if full.is_some() {
                     warn!(
-                        "client_full_timeout игнорируется: заданы client_headers_timeout и client_body_timeout"
+                        "client_full_timeout is ignored: client_headers_timeout and client_body_timeout are set"
                     );
                 }
                 (h, b, false)
             }
             (Some(h), None, full) => {
                 if full.is_some() {
-                    warn!("client_full_timeout игнорируется: задан client_headers_timeout");
+                    warn!("client_full_timeout is ignored: client_headers_timeout is set");
                 }
                 (h, Some(DEFAULT), false)
             }
             (None, Some(b), full) => {
                 if full.is_some() {
-                    warn!("client_full_timeout игнорируется: задан client_body_timeout");
+                    warn!("client_full_timeout is ignored: client_body_timeout is set");
                 }
                 (Some(DEFAULT), b, false)
             }
@@ -86,6 +94,7 @@ impl ScetyConfig {
             client_full_timeout: full_raw.flatten(),
             client_use_full_timeout: use_full_timeout,
             client_header_buffer,
+            trusted_ca_bundle,
         }
     }
 
@@ -96,7 +105,7 @@ impl ScetyConfig {
             other => match humantime::parse_duration(other) {
                 Ok(d) => Some(Some(d)),
                 Err(e) => {
-                    warn!(error=%e, field=%field_name, value=%other, "Некорректное значение таймаута, использую 5s");
+                    warn!(error=%e, field=%field_name, value=%other, "Invalid timeout value, using 5s");
                     Some(Some(Duration::from_secs(5)))
                 }
             },
@@ -134,6 +143,7 @@ pub fn get_scety_config() -> std::io::Result<Option<ScetyConfig>> {
 
     let limitation = toml_data.limitation.unwrap_or_default();
     let limit_buffers = toml_data.limit_buffers.unwrap_or_default();
+    let tls = toml_data.tls.unwrap_or_default();
 
     let config = ScetyConfig::new(
         limitation.ip_limitation,
@@ -141,6 +151,7 @@ pub fn get_scety_config() -> std::io::Result<Option<ScetyConfig>> {
         limitation.client_body_timeout,
         limitation.client_full_timeout,
         limit_buffers.client_header,
+        tls.trusted_ca_bundle,
     );
 
     Ok(Some(config))

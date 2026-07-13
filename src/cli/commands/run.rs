@@ -23,12 +23,25 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             warn!("ScetyConfig file exists but parsed as empty. Using defaults.");
             SCETY_CONFIG
-                .set(ScetyConfig::new(None, None, None, None, None))
+                .set(ScetyConfig::new(None, None, None, None, None, None))
                 .map_err(|_| "ScetyConfig was initialized twice!")?;
         }
 
         debug!("Start load configs...");
         let all_configs = get_all_configs();
+
+        debug!("Checking configured TLS certificates...");
+        if !crate::network::cert_check::check_all_configured_certs(
+            &all_configs,
+            crate::config::get_scety_config::scety_config()
+                .trusted_ca_bundle
+                .as_deref(),
+        ) {
+            warn!(
+                "Обнаружены проблемы с TLS-сертификатами (см. предупреждения выше). scety всё равно продолжит запуск — это не блокирующая проверка."
+            );
+        }
+
         if all_configs.is_empty() {
             start_fallback_server().await?;
         } else {

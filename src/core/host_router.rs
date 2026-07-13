@@ -397,8 +397,6 @@ mod tests {
         r
     }
 
-    // --- Точное совпадение ---
-
     #[test]
     fn exact_match() {
         let r = router_with(&[("example.com", 0)]);
@@ -411,8 +409,6 @@ mod tests {
         assert_eq!(r.matches("other.com"), None);
     }
 
-    // --- Одиночный wildcard * ---
-
     #[test]
     fn leading_wildcard_matches() {
         let r = router_with(&[("*.example.com", 0)]);
@@ -422,7 +418,6 @@ mod tests {
 
     #[test]
     fn leading_wildcard_no_multilevel() {
-        // *.example.com НЕ должен матчить v1.api.example.com
         let r = router_with(&[("*.example.com", 0)]);
         assert_eq!(r.matches("v1.api.example.com"), None);
     }
@@ -434,8 +429,6 @@ mod tests {
         assert_eq!(r.matches("api.io"), Some(0));
     }
 
-    // --- Двойной wildcard ** ---
-
     #[test]
     fn double_star_leading_matches_multilevel() {
         let r = router_with(&[("**.example.com", 0)]);
@@ -443,8 +436,6 @@ mod tests {
         assert_eq!(r.matches("v1.api.example.com"), Some(0));
         assert_eq!(r.matches("a.b.c.example.com"), Some(0));
     }
-
-    // --- Catch-all ---
 
     #[test]
     fn catch_all_star() {
@@ -459,28 +450,19 @@ mod tests {
         assert_eq!(r.matches("foo.bar.baz"), Some(0));
     }
 
-    // --- Приоритет: точное совпадение над wildcard ---
-
     #[test]
     fn exact_beats_wildcard() {
-        let r = router_with(&[
-            ("*.example.com", 0),   // wildcard — индекс 0
-            ("api.example.com", 1), // точный — индекс 1
-        ]);
-        // Точное совпадение должно побеждать
+        let r = router_with(&[("*.example.com", 0), ("api.example.com", 1)]);
         assert_eq!(r.matches("api.example.com"), Some(1));
-        // Для остальных — wildcard
         assert_eq!(r.matches("www.example.com"), Some(0));
     }
-
-    // --- Сложные паттерны (DP путь) ---
 
     #[test]
     fn complex_pattern_mid_wildcard() {
         let r = router_with(&[("api.*.internal", 0)]);
         assert_eq!(r.matches("api.dev.internal"), Some(0));
         assert_eq!(r.matches("api.prod.internal"), Some(0));
-        assert_eq!(r.matches("api.internal"), None); // * требует ровно один сегмент
+        assert_eq!(r.matches("api.internal"), None);
     }
 
     #[test]
@@ -519,19 +501,14 @@ mod tests {
     #[test]
     fn multi_star_trie_basic() {
         let r = router_with(&[("a.*.*.c", 0), ("a.b.*.*", 1)]);
-        // Точное лейбл "b" на втором сегменте имеет приоритет перед wildcard на том же уровне.
         assert_eq!(r.matches("a.b.x.c"), Some(1));
     }
 
     #[test]
     fn multi_star_trie_backtracking() {
         let r = router_with(&[("x.*.*.*", 0), ("x.y.*.*", 1)]);
-        // Если оба паттерна соответствуют, путь с более точным совпадением на раннем уровне
-        // (здесь "y" вместо *) выигрывает.
         assert_eq!(r.matches("x.y.z.w"), Some(1));
     }
-
-    // --- None когда пусто ---
 
     #[test]
     fn empty_router_returns_none() {
