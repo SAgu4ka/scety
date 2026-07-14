@@ -1,3 +1,4 @@
+use crate::config::get_scety_config::scety_config;
 use crate::core::response::HttpResponse;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -37,7 +38,12 @@ pub fn generate_text_response(
     content: Option<&str>,
     expose_version: bool,
 ) -> String {
-    let mut response = HttpResponse::new(code, connection, expose_version);
+    let mut response = HttpResponse::new(code, connection, expose_version).with_headers(
+        scety_config()
+            .global_response_headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone())),
+    );
 
     if with_content {
         let c_type = content_type.unwrap_or("text/plain; charset=utf-8");

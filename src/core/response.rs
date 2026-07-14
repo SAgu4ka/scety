@@ -39,6 +39,11 @@ impl<'a> HttpResponse<'a> {
         self
     }
 
+    pub fn with_headers(mut self, extra: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.headers.extend(extra);
+        self
+    }
+
     pub fn to_http_string(&self) -> String {
         debug!("Converting an HTTP response to a string...");
         let body_len = self.body.as_ref().map_or(0, |b| b.len());

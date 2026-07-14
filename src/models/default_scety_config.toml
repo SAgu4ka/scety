@@ -1,6 +1,22 @@
 [limitation]
 ip_limitation=20 #Лимит открытых соединений с 1 ip, -1 отключает лимит -- Необязательный(20)
-client_timeout="5s" #timeout для клиента, -1 отключает, Поддерживает разные временные еденицы и их слияние -- Необязательный("5s")
+client_headers_timeout="5s" #timeout на чтение заголовков запроса от клиента, -1 отключает -- Необязательный("5s")
+client_body_timeout="5s" #timeout на передачу тела запроса/ответа, -1 отключает -- Необязательный("5s")
+# client_full_timeout="30s" #единый timeout на всё соединение целиком вместо раздельных client_headers_timeout/client_body_timeout —
+# учитывается, только если НИ client_headers_timeout, НИ client_body_timeout не заданы явно
 
 [limit_buffers] #bytes
 client_header=16384
+
+# [tls]
+# trusted_ca_bundle = "/etc/scety/extra-ca-bundle.pem" #дополнительные доверенные корневые сертификаты (PEM) для проверки
+# цепочки сертификатов (scety check-certs и стартовая проверка), помимо стандартного набора Mozilla -- Необязательный
+
+# [headers.upstream] #заголовки, добавляемые ко ВСЕМ запросам, уходящим на апстрим, для ВСЕХ сервисов сразу.
+# Per-service [headers.upstream] в конфиге конкретного сервиса перекрывает одноимённые ключи отсюда.
+# X-Proxy-By = "scety"
+
+# [headers.response] #заголовки, добавляемые ко всем ответам, которые генерирует сам scety (страницы ошибок
+# 400/404/431/502 и т.п.), и как база для всех проксируемых ответов. Per-service [headers.response] перекрывает
+# одноимённые ключи отсюда.
+# X-Content-Type-Options = "nosniff"

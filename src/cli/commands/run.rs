@@ -23,7 +23,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             warn!("ScetyConfig file exists but parsed as empty. Using defaults.");
             SCETY_CONFIG
-                .set(ScetyConfig::new(None, None, None, None, None, None))
+                .set(ScetyConfig::new(
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    std::collections::HashMap::new(),
+                    std::collections::HashMap::new(),
+                ))
                 .map_err(|_| "ScetyConfig was initialized twice!")?;
         }
 

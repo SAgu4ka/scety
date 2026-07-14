@@ -1,5 +1,6 @@
 use crate::config::settings::SCETY_CONFIG_PATH;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -12,11 +13,18 @@ struct TomlConfig {
     limitation: Option<LimitationSection>,
     limit_buffers: Option<LimitBuffersSection>,
     tls: Option<TlsSection>,
+    headers: Option<GlobalHeadersSection>,
 }
 
 #[derive(Deserialize, Default)]
 struct TlsSection {
     trusted_ca_bundle: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct GlobalHeadersSection {
+    upstream: Option<HashMap<String, String>>,
+    response: Option<HashMap<String, String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -40,9 +48,12 @@ pub struct ScetyConfig {
     pub client_use_full_timeout: bool,
     pub client_header_buffer: Option<i32>,
     pub trusted_ca_bundle: Option<String>,
+    pub global_upstream_headers: HashMap<String, String>,
+    pub global_response_headers: HashMap<String, String>,
 }
 
 impl ScetyConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ip_limitation: Option<i32>,
         client_headers_timeout: Option<String>,
@@ -50,6 +61,8 @@ impl ScetyConfig {
         client_full_timeout: Option<String>,
         client_header_buffer: Option<i32>,
         trusted_ca_bundle: Option<String>,
+        global_upstream_headers: HashMap<String, String>,
+        global_response_headers: HashMap<String, String>,
     ) -> Self {
         const DEFAULT: Duration = Duration::from_secs(5);
 
@@ -95,6 +108,8 @@ impl ScetyConfig {
             client_use_full_timeout: use_full_timeout,
             client_header_buffer,
             trusted_ca_bundle,
+            global_upstream_headers,
+            global_response_headers,
         }
     }
 
@@ -144,6 +159,7 @@ pub fn get_scety_config() -> std::io::Result<Option<ScetyConfig>> {
     let limitation = toml_data.limitation.unwrap_or_default();
     let limit_buffers = toml_data.limit_buffers.unwrap_or_default();
     let tls = toml_data.tls.unwrap_or_default();
+    let headers = toml_data.headers.unwrap_or_default();
 
     let config = ScetyConfig::new(
         limitation.ip_limitation,
@@ -152,6 +168,8 @@ pub fn get_scety_config() -> std::io::Result<Option<ScetyConfig>> {
         limitation.client_full_timeout,
         limit_buffers.client_header,
         tls.trusted_ca_bundle,
+        headers.upstream.unwrap_or_default(),
+        headers.response.unwrap_or_default(),
     );
 
     Ok(Some(config))

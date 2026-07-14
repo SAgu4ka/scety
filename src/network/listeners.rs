@@ -1,11 +1,12 @@
 use crate::config::get_scety_config::scety_config;
-use crate::config::get_services_config::{ClientConfig, SslConfig};
+use crate::config::get_services_config::{ClientConfig, HeadersConfig, SslConfig};
 use crate::core::search_router::SearchRouter;
 use crate::http::error_pages::send;
 use crate::network::ip_limit;
 use crate::network::tls::{build_acme_config, load_manual_tls};
 use futures::StreamExt;
 use httparse::{EMPTY_HEADER, Request, Status};
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -334,7 +335,7 @@ where
             send(&mut *client_socket, 404, expose_version).await?;
             Ok(())
         }
-        Ok(Ok(Some((buf, read_bytes, target_port)))) => {
+        Ok(Ok(Some((buf, read_bytes, target_port, headers_config)))) => {
             let target_addr = match target_port {
                 Some(port) => format!("127.0.0.1:{}", port),
                 None => {
@@ -359,13 +360,24 @@ where
                         .rsplit_once(':')
                         .map(|(ip, _)| ip)
                         .unwrap_or(client_ip);
-                    let header = format!("X-Forwarded-For: {}\r\n", xff_ip);
+
+                    let mut upstream_headers = scety_config().global_upstream_headers.clone();
+                    if let Some(hc) = &headers_config
+                        && let Some(custom) = &hc.upstream
+                    {
+                        upstream_headers.extend(custom.clone());
+                    }
+                    upstream_headers.insert("X-Forwarded-For".to_string(), xff_ip.to_string());
 
                     let final_buf = if let Some(pos) =
                         buf[..read_bytes].windows(4).position(|w| w == b"\r\n\r\n")
                     {
-                        let mut new_buf = strip_client_xff(&buf[..pos + 2]);
-                        new_buf.extend_from_slice(header.as_bytes());
+                        let strip_names: Vec<&str> =
+                            upstream_headers.keys().map(String::as_str).collect();
+                        let mut new_buf = strip_headers_by_name(&buf[..pos + 2], &strip_names);
+                        for (key, value) in sorted_headers(&upstream_headers) {
+                            new_buf.extend_from_slice(format!("{key}: {value}\r\n").as_bytes());
+                        }
                         new_buf.extend_from_slice(&buf[pos + 2..read_bytes]);
                         new_buf
                     } else {
@@ -375,8 +387,20 @@ where
                     debug!(target=%target_addr, "Proxying request to upstream");
                     upstream_socket.write_all(&final_buf).await?;
 
-                    let copy_fut =
-                        tokio::io::copy_bidirectional(&mut *client_socket, &mut upstream_socket);
+                    let mut response_headers = scety_config().global_response_headers.clone();
+                    if let Some(hc) = &headers_config
+                        && let Some(custom) = &hc.response
+                    {
+                        response_headers.extend(custom.clone());
+                    }
+                    let response_headers = sorted_headers(&response_headers);
+
+                    let copy_fut = relay_upstream_response(
+                        &mut *client_socket,
+                        &mut upstream_socket,
+                        &response_headers,
+                        max_buf as usize,
+                    );
 
                     match scety_config().client_body_timeout {
                         Some(d) => match timeout(d, copy_fut).await {
@@ -400,14 +424,17 @@ where
     }
 }
 
-fn strip_client_xff(head: &[u8]) -> Vec<u8> {
-    const XFF: &[u8] = b"x-forwarded-for:";
-
+fn strip_headers_by_name(head: &[u8], names: &[&str]) -> Vec<u8> {
     let mut out = Vec::with_capacity(head.len());
     for line in head.split_inclusive(|&b| b == b'\n') {
         let trimmed = line.strip_suffix(b"\r\n").unwrap_or(line);
-        let is_xff = trimmed.len() >= XFF.len() && trimmed[..XFF.len()].eq_ignore_ascii_case(XFF);
-        if !is_xff {
+        let is_match = names.iter().any(|name| {
+            let name_bytes = name.as_bytes();
+            trimmed.len() > name_bytes.len()
+                && trimmed[..name_bytes.len()].eq_ignore_ascii_case(name_bytes)
+                && trimmed[name_bytes.len()] == b':'
+        });
+        if !is_match {
             out.extend_from_slice(line);
         }
     }
@@ -444,13 +471,25 @@ fn validate_framing_headers(headers: &[httparse::Header]) -> Result<(), &'static
     Ok(())
 }
 
+fn sorted_headers(headers: &HashMap<String, String>) -> Vec<(String, String)> {
+    let mut sorted: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    sorted
+}
+
 async fn read_request<S>(
     client_socket: &mut S,
     max_buf: usize,
     client_ip: &str,
     expose_version: bool,
     search_router: Arc<SearchRouter>,
-) -> Result<Option<(Vec<u8>, usize, Option<u16>)>, Box<dyn std::error::Error + Send + Sync>>
+) -> Result<
+    Option<(Vec<u8>, usize, Option<u16>, Option<HeadersConfig>)>,
+    Box<dyn std::error::Error + Send + Sync>,
+>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -498,6 +537,7 @@ where
                             buf,
                             read_bytes,
                             target_config.upstream.as_ref().and_then(|u| u.port),
+                            target_config.headers.clone(),
                         )));
                     }
                 }
@@ -522,40 +562,109 @@ where
     }
 }
 
+async fn relay_upstream_response<S>(
+    client_socket: &mut S,
+    upstream_socket: &mut TcpStream,
+    extra_headers: &[(String, String)],
+    max_buf: usize,
+) -> std::io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    if extra_headers.is_empty() {
+        return tokio::io::copy_bidirectional(client_socket, upstream_socket)
+            .await
+            .map(|_| ());
+    }
+
+    let mut buf = vec![0u8; max_buf.min(4096)];
+    let mut read_bytes = 0;
+
+    let header_end = loop {
+        let n = upstream_socket.read(&mut buf[read_bytes..]).await?;
+        if n == 0 {
+            client_socket.write_all(&buf[..read_bytes]).await?;
+            return Ok(());
+        }
+        read_bytes += n;
+
+        if let Some(pos) = buf[..read_bytes].windows(4).position(|w| w == b"\r\n\r\n") {
+            break Some(pos);
+        }
+
+        if read_bytes >= buf.len() {
+            if buf.len() >= max_buf {
+                debug!("Response headers exceeded buffer size, forwarding without custom headers");
+                client_socket.write_all(&buf[..read_bytes]).await?;
+                break None;
+            }
+            let new_len = (buf.len() * 2).min(max_buf);
+            buf.resize(new_len, 0);
+        }
+    };
+
+    if let Some(pos) = header_end {
+        let names: Vec<&str> = extra_headers.iter().map(|(k, _)| k.as_str()).collect();
+        let mut new_buf = strip_headers_by_name(&buf[..pos + 2], &names);
+        for (key, value) in extra_headers {
+            new_buf.extend_from_slice(format!("{key}: {value}\r\n").as_bytes());
+        }
+        new_buf.extend_from_slice(&buf[pos + 2..read_bytes]);
+        client_socket.write_all(&new_buf).await?;
+    }
+
+    tokio::io::copy_bidirectional(client_socket, upstream_socket)
+        .await
+        .map(|_| ())
+}
+
 #[cfg(test)]
 mod xff_tests {
-    use super::strip_client_xff;
+    use super::strip_headers_by_name;
+
+    const XFF: &[&str] = &["X-Forwarded-For"];
 
     #[test]
     fn keeps_request_line_and_other_headers_untouched() {
         let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nUser-Agent: curl\r\n";
-        assert_eq!(strip_client_xff(raw), raw.to_vec());
+        assert_eq!(strip_headers_by_name(raw, XFF), raw.to_vec());
     }
 
     #[test]
     fn strips_single_client_supplied_header() {
         let raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nX-Forwarded-For: 1.2.3.4\r\n";
         let expected = b"GET / HTTP/1.1\r\nHost: example.com\r\n".to_vec();
-        assert_eq!(strip_client_xff(raw), expected);
+        assert_eq!(strip_headers_by_name(raw, XFF), expected);
     }
 
     #[test]
     fn strips_all_occurrences_regardless_of_case() {
         let raw = b"GET / HTTP/1.1\r\nx-forwarded-for: 1.1.1.1\r\nHost: example.com\r\nX-FORWARDED-FOR: 2.2.2.2\r\n";
         let expected = b"GET / HTTP/1.1\r\nHost: example.com\r\n".to_vec();
-        assert_eq!(strip_client_xff(raw), expected);
+        assert_eq!(strip_headers_by_name(raw, XFF), expected);
     }
 
     #[test]
     fn does_not_touch_unrelated_headers_with_similar_prefix() {
         let raw = b"GET / HTTP/1.1\r\nX-Forwarded-Forwarded-By: something\r\n";
-        assert_eq!(strip_client_xff(raw), raw.to_vec());
+        assert_eq!(strip_headers_by_name(raw, XFF), raw.to_vec());
     }
 
     #[test]
     fn handles_request_with_no_headers() {
         let raw = b"GET / HTTP/1.1\r\n";
-        assert_eq!(strip_client_xff(raw), raw.to_vec());
+        assert_eq!(strip_headers_by_name(raw, XFF), raw.to_vec());
+    }
+
+    #[test]
+    fn strips_multiple_different_names_at_once() {
+        let raw =
+            b"GET / HTTP/1.1\r\nX-Forwarded-For: 1.2.3.4\r\nHost: example.com\r\nX-Custom: old\r\n";
+        let expected = b"GET / HTTP/1.1\r\nHost: example.com\r\n".to_vec();
+        assert_eq!(
+            strip_headers_by_name(raw, &["X-Forwarded-For", "X-Custom"]),
+            expected
+        );
     }
 }
 
