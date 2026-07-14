@@ -14,7 +14,7 @@ httparse = "1.10.1"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["chrono", "env-filter"] }
 clap = { version = "4", features = ["derive"] }
-nix = { version = "0.31", features = ["user"] }
+nix = { version = "0.31", features = ["user", "fs"] }
 tokio-util = "0.7.18"
 humantime = "2.3.0"
 smallvec = "1.15.2"

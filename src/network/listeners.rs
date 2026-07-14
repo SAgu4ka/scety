@@ -414,6 +414,36 @@ fn strip_client_xff(head: &[u8]) -> Vec<u8> {
     out
 }
 
+fn validate_framing_headers(headers: &[httparse::Header]) -> Result<(), &'static str> {
+    let mut content_length: Option<&[u8]> = None;
+    let mut transfer_encoding: Option<&[u8]> = None;
+
+    for h in headers {
+        if h.name.eq_ignore_ascii_case("Content-Length") {
+            match content_length {
+                None => content_length = Some(h.value),
+                Some(prev) if prev == h.value => {}
+                Some(_) => return Err("multiple Content-Length headers with different values"),
+            }
+        } else if h.name.eq_ignore_ascii_case("Transfer-Encoding") {
+            transfer_encoding = Some(h.value);
+        }
+    }
+
+    if transfer_encoding.is_some() && content_length.is_some() {
+        return Err("both Content-Length and Transfer-Encoding present");
+    }
+
+    if let Some(value) = transfer_encoding {
+        let as_str = std::str::from_utf8(value).unwrap_or("").trim();
+        if !as_str.eq_ignore_ascii_case("chunked") {
+            return Err("Transfer-Encoding present but is not exactly 'chunked'");
+        }
+    }
+
+    Ok(())
+}
+
 async fn read_request<S>(
     client_socket: &mut S,
     max_buf: usize,
@@ -443,6 +473,12 @@ where
 
         match req.parse(&buf[..read_bytes]) {
             Ok(Status::Complete(_)) => {
+                if let Err(reason) = validate_framing_headers(&headers) {
+                    error!(client_ip=%client_ip, reason=%reason, "Rejected request: ambiguous message framing");
+                    send(&mut *client_socket, 400, expose_version).await?;
+                    return Ok(None);
+                }
+
                 let host = headers
                     .iter()
                     .find(|h| h.name.eq_ignore_ascii_case("Host"))
@@ -520,5 +556,81 @@ mod xff_tests {
     fn handles_request_with_no_headers() {
         let raw = b"GET / HTTP/1.1\r\n";
         assert_eq!(strip_client_xff(raw), raw.to_vec());
+    }
+}
+
+#[cfg(test)]
+mod framing_tests {
+    use super::validate_framing_headers;
+    use httparse::Header;
+
+    fn h<'a>(name: &'a str, value: &'a [u8]) -> Header<'a> {
+        Header { name, value }
+    }
+
+    #[test]
+    fn plain_content_length_is_fine() {
+        let headers = [h("Host", b"example.com"), h("Content-Length", b"42")];
+        assert!(validate_framing_headers(&headers).is_ok());
+    }
+
+    #[test]
+    fn plain_chunked_is_fine() {
+        let headers = [
+            h("Host", b"example.com"),
+            h("Transfer-Encoding", b"chunked"),
+        ];
+        assert!(validate_framing_headers(&headers).is_ok());
+    }
+
+    #[test]
+    fn no_body_headers_at_all_is_fine() {
+        let headers = [h("Host", b"example.com")];
+        assert!(validate_framing_headers(&headers).is_ok());
+    }
+
+    #[test]
+    fn both_content_length_and_transfer_encoding_rejected() {
+        let headers = [
+            h("Content-Length", b"42"),
+            h("Transfer-Encoding", b"chunked"),
+        ];
+        assert!(validate_framing_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn duplicate_content_length_same_value_is_fine() {
+        let headers = [h("Content-Length", b"42"), h("Content-Length", b"42")];
+        assert!(validate_framing_headers(&headers).is_ok());
+    }
+
+    #[test]
+    fn duplicate_content_length_different_values_rejected() {
+        let headers = [h("Content-Length", b"42"), h("Content-Length", b"0")];
+        assert!(validate_framing_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn transfer_encoding_not_exactly_chunked_rejected() {
+        let headers = [h("Transfer-Encoding", b"chunked, chunked")];
+        assert!(validate_framing_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn transfer_encoding_case_insensitive_chunked_is_fine() {
+        let headers = [h("Transfer-Encoding", b"CHUNKED")];
+        assert!(validate_framing_headers(&headers).is_ok());
+    }
+
+    #[test]
+    fn transfer_encoding_with_whitespace_is_fine() {
+        let headers = [h("Transfer-Encoding", b" chunked ")];
+        assert!(validate_framing_headers(&headers).is_ok());
+    }
+
+    #[test]
+    fn transfer_encoding_gzip_rejected() {
+        let headers = [h("Transfer-Encoding", b"gzip")];
+        assert!(validate_framing_headers(&headers).is_err());
     }
 }

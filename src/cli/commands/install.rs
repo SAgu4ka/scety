@@ -1,9 +1,50 @@
 use crate::config::settings::SCETY_CONFIG_PATH;
+use nix::unistd::{Group, User, chown};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-const SERVICE_CONTENT: &str = "[Unit]\nDescription=Scety reverse proxy\nAfter=network.target\n\n[Service]\nExecStart={exe_path} run\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target";
+const SCETY_USER: &str = "scety";
+const ACME_CACHE_PATH: &str = "/etc/scety/acme-cache";
+
+const SERVICE_CONTENT: &str = "\
+[Unit]
+Description=Scety reverse proxy
+After=network.target
+
+[Service]
+ExecStart={exe_path} run
+Restart=on-failure
+RestartSec=5
+
+User=scety
+Group=scety
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/etc/scety/acme-cache
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+# SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target";
 const SCETY_CONFIG: &str = include_str!("../../models/default_scety_config.toml");
 
 pub async fn install() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,6 +52,9 @@ pub async fn install() -> Result<(), Box<dyn std::error::Error>> {
         error!("Run as root or with sudo");
         std::process::exit(1);
     }
+
+    ensure_system_user()?;
+    maybe_join_ssl_cert_group()?;
 
     let config_path = Path::new(SCETY_CONFIG_PATH);
 
@@ -22,6 +66,8 @@ pub async fn install() -> Result<(), Box<dyn std::error::Error>> {
         fs::write(config_path, SCETY_CONFIG)?;
         info!(path = %SCETY_CONFIG_PATH, "Default configuration file created");
     }
+
+    configure_permissions(config_path)?;
 
     if std::path::Path::new("/etc/systemd/system/scety.service").exists() {
         let status = std::process::Command::new("systemctl")
@@ -55,5 +101,76 @@ pub async fn install() -> Result<(), Box<dyn std::error::Error>> {
         .status()?;
 
     info!("Scety successfully installed and started as a systemd service");
+    Ok(())
+}
+
+fn ensure_system_user() -> Result<(), Box<dyn std::error::Error>> {
+    if User::from_name(SCETY_USER)?.is_some() {
+        return Ok(());
+    }
+
+    info!(user = %SCETY_USER, "Creating dedicated system user for scety");
+    let status = std::process::Command::new("useradd")
+        .args([
+            "--system",
+            "--no-create-home",
+            "--shell",
+            "/usr/sbin/nologin",
+            "--user-group",
+            SCETY_USER,
+        ])
+        .status()?;
+
+    if !status.success() {
+        return Err(format!("useradd exited with status {status}").into());
+    }
+
+    Ok(())
+}
+
+fn maybe_join_ssl_cert_group() -> Result<(), Box<dyn std::error::Error>> {
+    if Group::from_name("ssl-cert")?.is_none() {
+        return Ok(());
+    }
+
+    info!(
+        "Detected 'ssl-cert' group (typical for certbot-managed certificates) — adding scety to it"
+    );
+    let status = std::process::Command::new("usermod")
+        .args(["-aG", "ssl-cert", SCETY_USER])
+        .status()?;
+
+    if !status.success() {
+        warn!(
+            "Could not add scety to 'ssl-cert' group automatically; if you use certbot-managed \
+             certificates, add it manually: usermod -aG ssl-cert scety"
+        );
+    }
+
+    Ok(())
+}
+
+fn configure_permissions(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let scety = User::from_name(SCETY_USER)?.ok_or("scety user must exist by this point")?;
+    let uid = scety.uid;
+    let gid = scety.gid;
+
+    if let Some(config_dir) = config_path.parent() {
+        for entry in walkdir::WalkDir::new(config_dir) {
+            let entry = entry?;
+            chown(entry.path(), None, Some(gid))?;
+            let mode = if entry.file_type().is_dir() {
+                0o750
+            } else {
+                0o640
+            };
+            fs::set_permissions(entry.path(), fs::Permissions::from_mode(mode))?;
+        }
+    }
+
+    fs::create_dir_all(ACME_CACHE_PATH)?;
+    chown(ACME_CACHE_PATH, Some(uid), Some(gid))?;
+    fs::set_permissions(ACME_CACHE_PATH, fs::Permissions::from_mode(0o700))?;
+
     Ok(())
 }
