@@ -17,18 +17,18 @@ struct TomlConfig {
 }
 
 #[derive(Deserialize, Default)]
-struct TlsSection {
+pub(crate) struct TlsSection {
     trusted_ca_bundle: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
-struct GlobalHeadersSection {
+pub(crate) struct GlobalHeadersSection {
     upstream: Option<HashMap<String, String>>,
     response: Option<HashMap<String, String>>,
 }
 
 #[derive(Deserialize, Default)]
-struct LimitationSection {
+pub(crate) struct LimitationSection {
     ip_limitation: Option<i32>,
     max_host_labels: Option<i32>,
     client_headers_timeout: Option<String>,
@@ -37,7 +37,7 @@ struct LimitationSection {
 }
 
 #[derive(Deserialize, Default)]
-struct LimitBuffersSection {
+pub(crate) struct LimitBuffersSection {
     client_header: Option<i32>,
 }
 
@@ -55,27 +55,26 @@ pub struct ScetyConfig {
 }
 
 impl ScetyConfig {
-    pub fn new(
-        ip_limitation: Option<i32>,
-        max_host_labels: Option<i32>,
-        client_headers_timeout: Option<String>,
-        client_body_timeout: Option<String>,
-        client_full_timeout: Option<String>,
-        client_header_buffer: Option<i32>,
-        trusted_ca_bundle: Option<String>,
-        global_upstream_headers: HashMap<String, String>,
-        global_response_headers: HashMap<String, String>,
+    pub(crate) fn new(
+        limitation: LimitationSection,
+        limit_buffers: LimitBuffersSection,
+        tls: TlsSection,
+        headers: GlobalHeadersSection,
     ) -> Self {
         const DEFAULT: Duration = Duration::from_secs(5);
 
-        let ip_limitation = Some(ip_limitation.unwrap_or(20));
-        let client_header_buffer = Some(client_header_buffer.unwrap_or(16 * 1024));
-        let max_host_labels = Some(max_host_labels.unwrap_or(20));
+        let ip_limitation = Some(limitation.ip_limitation.unwrap_or(20));
+        let max_host_labels = Some(limitation.max_host_labels.unwrap_or(20));
+        let client_header_buffer = Some(limit_buffers.client_header.unwrap_or(16 * 1024));
 
-        let headers_raw =
-            Self::parse_optional_timeout(client_headers_timeout, "client_headers_timeout");
-        let body_raw = Self::parse_optional_timeout(client_body_timeout, "client_body_timeout");
-        let full_raw = Self::parse_optional_timeout(client_full_timeout, "client_full_timeout");
+        let headers_raw = Self::parse_optional_timeout(
+            limitation.client_headers_timeout,
+            "client_headers_timeout",
+        );
+        let body_raw =
+            Self::parse_optional_timeout(limitation.client_body_timeout, "client_body_timeout");
+        let full_raw =
+            Self::parse_optional_timeout(limitation.client_full_timeout, "client_full_timeout");
 
         let (final_headers, final_body, use_full_timeout) = match (headers_raw, body_raw, full_raw)
         {
@@ -111,12 +110,11 @@ impl ScetyConfig {
             client_full_timeout: full_raw.flatten(),
             client_use_full_timeout: use_full_timeout,
             client_header_buffer,
-            trusted_ca_bundle,
-            global_upstream_headers,
-            global_response_headers,
+            trusted_ca_bundle: tls.trusted_ca_bundle,
+            global_upstream_headers: headers.upstream.unwrap_or_default(),
+            global_response_headers: headers.response.unwrap_or_default(),
         }
     }
-
     pub fn host_exceeds_label_limit(&self, host: &str) -> bool {
         match self.max_host_labels {
             Some(limit) if limit >= 0 => host.split('.').count() > limit as usize,
@@ -167,21 +165,11 @@ pub fn get_scety_config() -> std::io::Result<Option<ScetyConfig>> {
         }
     };
 
-    let limitation = toml_data.limitation.unwrap_or_default();
-    let limit_buffers = toml_data.limit_buffers.unwrap_or_default();
-    let tls = toml_data.tls.unwrap_or_default();
-    let headers = toml_data.headers.unwrap_or_default();
-
     let config = ScetyConfig::new(
-        limitation.ip_limitation,
-        limitation.max_host_labels,
-        limitation.client_headers_timeout,
-        limitation.client_body_timeout,
-        limitation.client_full_timeout,
-        limit_buffers.client_header,
-        tls.trusted_ca_bundle,
-        headers.upstream.unwrap_or_default(),
-        headers.response.unwrap_or_default(),
+        toml_data.limitation.unwrap_or_default(),
+        toml_data.limit_buffers.unwrap_or_default(),
+        toml_data.tls.unwrap_or_default(),
+        toml_data.headers.unwrap_or_default(),
     );
 
     Ok(Some(config))
