@@ -15,7 +15,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub enum SslMode {
     None,
@@ -531,6 +531,12 @@ where
                         .next()
                         .unwrap_or(&req_host)
                         .to_string();
+
+                    if scety_config().host_exceeds_label_limit(&clean_host) {
+                        warn!(client_ip=%client_ip, host=%clean_host, "Host header exceeds configured label limit");
+                        send(&mut *client_socket, 423, expose_version).await?;
+                        return Ok(None);
+                    }
 
                     if let Some(target_config) = search_router.find(&clean_host) {
                         return Ok(Some((

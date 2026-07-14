@@ -4,6 +4,7 @@ client_headers_timeout="5s" #timeout на чтение заголовков за
 client_body_timeout="5s" #timeout на передачу тела запроса/ответа, -1 отключает -- Необязательный("5s")
 # client_full_timeout="30s" #единый timeout на всё соединение целиком вместо раздельных client_headers_timeout/client_body_timeout —
 # учитывается, только если НИ client_headers_timeout, НИ client_body_timeout не заданы явно
+max_host_labels = 20   # -1 отключает проверку
 
 [limit_buffers] #bytes
 client_header=16384

@@ -30,6 +30,7 @@ struct GlobalHeadersSection {
 #[derive(Deserialize, Default)]
 struct LimitationSection {
     ip_limitation: Option<i32>,
+    max_host_labels: Option<i32>,
     client_headers_timeout: Option<String>,
     client_body_timeout: Option<String>,
     client_full_timeout: Option<String>,
@@ -42,6 +43,7 @@ struct LimitBuffersSection {
 
 pub struct ScetyConfig {
     pub ip_limitation: Option<i32>,
+    pub max_host_labels: Option<i32>,
     pub client_headers_timeout: Option<Duration>,
     pub client_body_timeout: Option<Duration>,
     pub client_full_timeout: Option<Duration>,
@@ -53,9 +55,9 @@ pub struct ScetyConfig {
 }
 
 impl ScetyConfig {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ip_limitation: Option<i32>,
+        max_host_labels: Option<i32>,
         client_headers_timeout: Option<String>,
         client_body_timeout: Option<String>,
         client_full_timeout: Option<String>,
@@ -68,6 +70,7 @@ impl ScetyConfig {
 
         let ip_limitation = Some(ip_limitation.unwrap_or(20));
         let client_header_buffer = Some(client_header_buffer.unwrap_or(16 * 1024));
+        let max_host_labels = Some(max_host_labels.unwrap_or(20));
 
         let headers_raw =
             Self::parse_optional_timeout(client_headers_timeout, "client_headers_timeout");
@@ -102,6 +105,7 @@ impl ScetyConfig {
 
         Self {
             ip_limitation,
+            max_host_labels,
             client_headers_timeout: final_headers,
             client_body_timeout: final_body,
             client_full_timeout: full_raw.flatten(),
@@ -110,6 +114,13 @@ impl ScetyConfig {
             trusted_ca_bundle,
             global_upstream_headers,
             global_response_headers,
+        }
+    }
+
+    pub fn host_exceeds_label_limit(&self, host: &str) -> bool {
+        match self.max_host_labels {
+            Some(limit) if limit >= 0 => host.split('.').count() > limit as usize,
+            _ => false,
         }
     }
 
@@ -163,6 +174,7 @@ pub fn get_scety_config() -> std::io::Result<Option<ScetyConfig>> {
 
     let config = ScetyConfig::new(
         limitation.ip_limitation,
+        limitation.max_host_labels,
         limitation.client_headers_timeout,
         limitation.client_body_timeout,
         limitation.client_full_timeout,
