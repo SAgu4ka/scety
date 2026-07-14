@@ -1,4 +1,4 @@
-use crate::config::settings::SCETY_CONFIG_PATH;
+use crate::config::settings::{SCETY_CONFIG_PATH, MAIN_SCETY_PATH};
 use nix::unistd::{Group, User, chown};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -6,7 +6,7 @@ use std::path::Path;
 use tracing::{error, info, warn};
 
 const SCETY_USER: &str = "scety";
-const ACME_CACHE_PATH: &str = "/etc/scety/acme-cache";
+const ACME_CACHE_PATH: &str = "{main_path}/acme-cache";
 
 const SERVICE_CONTENT: &str = "\
 [Unit]
@@ -27,7 +27,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/etc/scety/acme-cache
+ReadWritePaths={main_path}/acme-cache
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
@@ -88,7 +88,7 @@ pub async fn install() -> Result<(), Box<dyn std::error::Error>> {
 
     let exe_path = std::env::current_exe()?;
 
-    let service_content = SERVICE_CONTENT.replace("{exe_path}", &exe_path.to_string_lossy());
+    let service_content = SERVICE_CONTENT.replace("{exe_path}", &exe_path.to_string_lossy().replace("{main_path}", &MAIN_SCETY_PATH));
 
     std::fs::write("/etc/systemd/system/scety.service", service_content)?;
     info!("Service file created");
@@ -168,9 +168,11 @@ fn configure_permissions(config_path: &Path) -> Result<(), Box<dyn std::error::E
         }
     }
 
-    fs::create_dir_all(ACME_CACHE_PATH)?;
-    chown(ACME_CACHE_PATH, Some(uid), Some(gid))?;
-    fs::set_permissions(ACME_CACHE_PATH, fs::Permissions::from_mode(0o700))?;
+    let acme_cache_path = ACME_CACHE_PATH.replace("{main_path}", MAIN_SCETY_PATH);
+
+    fs::create_dir_all(&acme_cache_path)?;
+    chown(Path::new(&acme_cache_path), Some(uid), Some(gid))?;
+    fs::set_permissions(&acme_cache_path, fs::Permissions::from_mode(0o700))?;
 
     Ok(())
 }

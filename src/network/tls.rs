@@ -1,4 +1,5 @@
 use crate::config::get_services_config::SslConfig;
+use crate::config::settings::MAIN_SCETY_PATH;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::fs::File;
 use std::io::BufReader;
@@ -57,7 +58,7 @@ pub fn build_acme_config(
     let cache = ssl
         .acme_cache
         .clone()
-        .unwrap_or_else(|| "/etc/scety/acme-cache".to_string());
+        .unwrap_or_else(|| "{main_path}/acme-cache".replace("{main_path}", MAIN_SCETY_PATH).to_string());
 
     info!(domains=?domains, email=%email, cache=%cache, "Setting up ACME");
 

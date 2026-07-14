@@ -2,5 +2,6 @@
 expose_version = true
 
 [paths]
-services_configs_path = "/etc/scety/serviсes"
-scety_config_path = "/etc/scety/scety.toml"
+main_scety_path = "/etc/scety"
+services_configs_path = "{main_scety_path}/serviсes"
+scety_config_path = "{main_scety_path}/scety.toml"
