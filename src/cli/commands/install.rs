@@ -1,4 +1,4 @@
-use crate::config::settings::{SCETY_CONFIG_PATH, MAIN_SCETY_PATH};
+use crate::config::settings::{MAIN_SCETY_PATH, SCETY_CONFIG_PATH};
 use nix::unistd::{Group, User, chown};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -88,7 +88,12 @@ pub async fn install() -> Result<(), Box<dyn std::error::Error>> {
 
     let exe_path = std::env::current_exe()?;
 
-    let service_content = SERVICE_CONTENT.replace("{exe_path}", &exe_path.to_string_lossy().replace("{main_path}", &MAIN_SCETY_PATH));
+    let service_content = SERVICE_CONTENT.replace(
+        "{exe_path}",
+        &exe_path
+            .to_string_lossy()
+            .replace("{main_path}", MAIN_SCETY_PATH),
+    );
 
     std::fs::write("/etc/systemd/system/scety.service", service_content)?;
     info!("Service file created");
