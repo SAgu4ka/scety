@@ -259,27 +259,12 @@ where
 {
     let cfg = scety_config();
 
-    if cfg.client_use_full_timeout {
-        return match cfg.client_full_timeout {
-            Some(d) => {
-                match timeout(
-                    d,
-                    process_request_inner(client_socket, client_ip, expose_version, search_router),
-                )
-                .await
-                {
-                    Ok(result) => result,
-                    Err(_) => {
-                        debug!(client_ip=%client_ip, "Connection closed: full timeout exceeded");
-                        Ok(())
-                    }
-                }
-            }
-            None => {
-                process_request_inner(client_socket, client_ip, expose_version, search_router).await
-            }
-        };
-    }
+    debug!(
+        client_ip=%client_ip,
+        full_timeout_mode=%cfg.client_use_full_timeout,
+        full_timeout=?cfg.client_full_timeout,
+        "Request timeout configuration"
+    );
 
     process_request_inner(client_socket, client_ip, expose_version, search_router).await
 }
@@ -335,7 +320,7 @@ where
             send(&mut *client_socket, 404, expose_version).await?;
             Ok(())
         }
-        Ok(Ok(Some((buf, read_bytes, target_port, headers_config)))) => {
+        Ok(Ok(Some((buf, read_bytes, target_port, headers_config, is_ws)))) => {
             let target_addr = match target_port {
                 Some(port) => format!("127.0.0.1:{}", port),
                 None => {
@@ -401,6 +386,11 @@ where
                         &response_headers,
                         max_buf as usize,
                     );
+
+                    if is_ws {
+                        copy_fut.await?;
+                        return Ok(());
+                    }
 
                     match scety_config().client_body_timeout {
                         Some(d) => match timeout(d, copy_fut).await {
@@ -471,6 +461,25 @@ fn validate_framing_headers(headers: &[httparse::Header]) -> Result<(), &'static
     Ok(())
 }
 
+fn is_websocket_upgrade(headers: &[httparse::Header]) -> bool {
+    let has_token = |value: &[u8], token: &str| {
+        std::str::from_utf8(value)
+            .unwrap_or("")
+            .split(',')
+            .any(|t| t.trim().eq_ignore_ascii_case(token))
+    };
+
+    let has_connection_upgrade = headers
+        .iter()
+        .any(|h| h.name.eq_ignore_ascii_case("Connection") && has_token(h.value, "upgrade"));
+
+    let has_upgrade_websocket = headers
+        .iter()
+        .any(|h| h.name.eq_ignore_ascii_case("Upgrade") && has_token(h.value, "websocket"));
+
+    has_connection_upgrade && has_upgrade_websocket
+}
+
 fn sorted_headers(headers: &HashMap<String, String>) -> Vec<(String, String)> {
     let mut sorted: Vec<(String, String)> = headers
         .iter()
@@ -487,7 +496,7 @@ async fn read_request<S>(
     expose_version: bool,
     search_router: Arc<SearchRouter>,
 ) -> Result<
-    Option<(Vec<u8>, usize, Option<u16>, Option<HeadersConfig>)>,
+    Option<(Vec<u8>, usize, Option<u16>, Option<HeadersConfig>, bool)>,
     Box<dyn std::error::Error + Send + Sync>,
 >
 where
@@ -518,6 +527,8 @@ where
                     return Ok(None);
                 }
 
+                let is_ws = is_websocket_upgrade(&headers);
+
                 let host = headers
                     .iter()
                     .find(|h| h.name.eq_ignore_ascii_case("Host"))
@@ -539,11 +550,15 @@ where
                     }
 
                     if let Some(target_config) = search_router.find(&clean_host) {
+                        if is_ws {
+                            debug!(client_ip=%client_ip, host=%clean_host, "WebSocket upgrade request detected");
+                        }
                         return Ok(Some((
                             buf,
                             read_bytes,
                             target_config.upstream.as_ref().and_then(|u| u.port),
                             target_config.headers.clone(),
+                            is_ws,
                         )));
                     }
                 }
@@ -747,5 +762,60 @@ mod framing_tests {
     fn transfer_encoding_gzip_rejected() {
         let headers = [h("Transfer-Encoding", b"gzip")];
         assert!(validate_framing_headers(&headers).is_err());
+    }
+}
+
+#[cfg(test)]
+mod websocket_upgrade_tests {
+    use super::is_websocket_upgrade;
+    use httparse::Header;
+
+    fn h<'a>(name: &'a str, value: &'a [u8]) -> Header<'a> {
+        Header { name, value }
+    }
+
+    #[test]
+    fn valid_handshake_is_detected() {
+        let headers = [h("Connection", b"Upgrade"), h("Upgrade", b"websocket")];
+        assert!(is_websocket_upgrade(&headers));
+    }
+
+    #[test]
+    fn case_and_multi_token_connection_still_detected() {
+        let headers = [
+            h("connection", b"keep-alive, Upgrade"),
+            h("upgrade", b"WebSocket"),
+        ];
+        assert!(is_websocket_upgrade(&headers));
+    }
+
+    #[test]
+    fn missing_upgrade_header_is_not_websocket() {
+        let headers = [h("Connection", b"Upgrade")];
+        assert!(!is_websocket_upgrade(&headers));
+    }
+
+    #[test]
+    fn missing_connection_header_is_not_websocket() {
+        let headers = [h("Upgrade", b"websocket")];
+        assert!(!is_websocket_upgrade(&headers));
+    }
+
+    #[test]
+    fn h2c_upgrade_is_not_websocket() {
+        let headers = [h("Connection", b"Upgrade"), h("Upgrade", b"h2c")];
+        assert!(!is_websocket_upgrade(&headers));
+    }
+
+    #[test]
+    fn connection_without_upgrade_token_is_not_websocket() {
+        let headers = [h("Connection", b"keep-alive"), h("Upgrade", b"websocket")];
+        assert!(!is_websocket_upgrade(&headers));
+    }
+
+    #[test]
+    fn plain_request_is_not_websocket() {
+        let headers = [h("Host", b"example.com")];
+        assert!(!is_websocket_upgrade(&headers));
     }
 }
