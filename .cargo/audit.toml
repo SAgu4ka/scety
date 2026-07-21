@@ -1,0 +1,13 @@
+# Policy for `cargo audit` (RustSec advisory scan) — run in CI via
+# .github/workflows/ci.yml (security-audit job) and locally via `make audit`.
+#
+# Without this file, cargo-audit fails the build on *any* advisory match, including
+# "unmaintained" / "unsound" / "notice" categories that aren't actual vulnerabilities.
+# The categories listed below are still fully detected and printed in the output —
+# they just don't fail the build by themselves. Only real vulnerability advisories do.
+#
+# Re-run `cargo audit` (or `make audit`) every so often and actually read the warnings:
+# an "unmaintained" dependency today can become a real vulnerability with no fix later.
+[advisories]
+ignore = []
+informational_warnings = ["unmaintained", "unsound", "notice"]

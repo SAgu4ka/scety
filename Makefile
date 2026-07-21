@@ -1,13 +1,12 @@
-.PHONY: ci fmt clippy build test
+.PHONY: ci fmt fmt-check clippy build test audit install-tools
 
-ci:
-	cargo fmt --check
-	cargo clippy -- -D warnings
-	cargo build --verbose
-	cargo test --verbose
+ci: fmt-check clippy build test audit
 
 fmt:
 	cargo fmt
+
+fmt-check:
+	cargo fmt --check
 
 clippy:
 	cargo clippy -- -D warnings
@@ -17,3 +16,9 @@ build:
 
 test:
 	cargo test
+
+audit: install-tools
+	cargo audit
+
+install-tools:
+	@cargo audit --version >/dev/null 2>&1 || cargo install cargo-audit --locked
