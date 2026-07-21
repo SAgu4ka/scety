@@ -1,7 +1,9 @@
 [package]
 name = "scety"
-version = "0.0.2"
+version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/SAgu4ka/scety"
 
 [dependencies]
 tokio = { version = "1", features = ["full", "signal"] }

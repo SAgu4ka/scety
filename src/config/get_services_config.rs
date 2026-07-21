@@ -1,5 +1,3 @@
-#![allow(unused)] // пока что заглушка нереализованных переменных, они задуманы на будущее
-
 use crate::config::settings::SERVICES_CONFIGS_PATH;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -10,13 +8,24 @@ use walkdir::WalkDir;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ClientConfig {
+    /// Reserved for a future `proxy` / `redirect` / `static` distinction. Parsed and validated,
+    /// but not yet read anywhere in the runtime path.
+    #[allow(dead_code)]
     pub mode: String,
     pub host: Option<String>,
     pub hosts: Option<Vec<String>>,
     pub listen_port: Option<u16>,
+    /// Multi-port listening. Validated by `validate_config` (including the matching
+    /// `[upstream_<port>]` sections below), but not yet consumed by `network::global_router` /
+    /// `network::listeners` — only `listen_port` currently drives the runtime listeners.
+    /// TODO: wire this up before documenting multi-port support as available.
+    #[allow(dead_code)]
     pub listens_port: Option<Vec<u16>>,
     pub upstream: Option<UpstreamConfig>,
+    /// Per-port upstreams (`[upstream_<port>]`), keyed alongside `listens_port`. Same caveat as
+    /// `listens_port`: validated, not yet wired into request routing.
     #[serde(flatten)]
+    #[allow(dead_code)]
     pub upstreams: HashMap<String, UpstreamConfig>,
     pub ssl: Option<SslConfig>,
     #[serde(flatten)]
@@ -27,7 +36,13 @@ pub struct ClientConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct UpstreamConfig {
     pub port: Option<u16>,
+    /// Load-balancing across multiple upstream ports. Parsed and validated, not yet consumed —
+    /// only `port` is currently used to pick a single target.
+    #[allow(dead_code)]
     pub ports: Option<Vec<u16>>,
+    /// Per-service timeout override. Not yet read; the global `client_body_timeout` /
+    /// `client_headers_timeout` from `scety.toml` are used instead.
+    #[allow(dead_code)]
     pub service_timeout: Option<String>,
 }
 
@@ -154,7 +169,7 @@ pub fn validate_config(config: &ClientConfig) -> Result<(), String> {
     }
 
     if let Some(ports) = &config.listens_port {
-        for (key, ssl) in &config.ssl_ports {
+        for key in config.ssl_ports.keys() {
             if let Some(port_str) = key.strip_prefix("ssl_")
                 && let Ok(port) = port_str.parse::<u16>()
                 && !ports.contains(&port)
@@ -194,69 +209,132 @@ pub fn validate_config(config: &ClientConfig) -> Result<(), String> {
     Ok(())
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-//     fn base_config() -> ClientConfig {
-//         ClientConfig {
-//             mode: "proxy".to_string(),
-//             host: Some("example.com".to_string()),
-//             hosts: None,
-//             listen_port: Some(80),
-//             listens_port: None,
-//             upstream: Some(UpstreamConfig {
-//                 port: Some(3000),
-//                 ports: None,
-//                 service_timeout: None,
-//             }),
-//             upstreams: HashMap::new(),
-//             ssl: None,
-//             headers: None,
-//         }
-//     }
+    fn base_config() -> ClientConfig {
+        ClientConfig {
+            mode: "proxy".to_string(),
+            host: Some("example.com".to_string()),
+            hosts: None,
+            listen_port: Some(80),
+            listens_port: None,
+            upstream: Some(UpstreamConfig {
+                port: Some(3000),
+                ports: None,
+                service_timeout: None,
+            }),
+            upstreams: HashMap::new(),
+            ssl: None,
+            ssl_ports: HashMap::new(),
+            headers: None,
+        }
+    }
 
-//     #[test]
-//     fn valid_config_passes() {
-//         assert!(validate_config(&base_config()).is_ok());
-//     }
+    #[test]
+    fn valid_config_passes() {
+        assert!(validate_config(&base_config()).is_ok());
+    }
 
-//     #[test]
-//     fn missing_host_and_hosts_fails() {
-//         let mut c = base_config();
-//         c.host = None;
-//         assert!(validate_config(&c).is_err());
-//     }
+    #[test]
+    fn missing_host_and_hosts_fails() {
+        let mut c = base_config();
+        c.host = None;
+        assert!(validate_config(&c).is_err());
+    }
 
-//     #[test]
-//     fn both_host_and_hosts_fails() {
-//         let mut c = base_config();
-//         c.hosts = Some(vec!["other.com".to_string()]);
-//         assert!(validate_config(&c).is_err());
-//     }
+    #[test]
+    fn both_host_and_hosts_fails() {
+        let mut c = base_config();
+        c.hosts = Some(vec!["other.com".to_string()]);
+        assert!(validate_config(&c).is_err());
+    }
 
-//     #[test]
-//     fn missing_listen_port_fails() {
-//         let mut c = base_config();
-//         c.listen_port = None;
-//         assert!(validate_config(&c).is_err());
-//     }
+    #[test]
+    fn missing_listen_port_fails() {
+        let mut c = base_config();
+        c.listen_port = None;
+        assert!(validate_config(&c).is_err());
+    }
 
-//     #[test]
-//     fn missing_upstream_fails() {
-//         let mut c = base_config();
-//         c.upstream = None;
-//         assert!(validate_config(&c).is_err());
-//     }
+    #[test]
+    fn missing_upstream_fails() {
+        let mut c = base_config();
+        c.upstream = None;
+        assert!(validate_config(&c).is_err());
+    }
 
-//     #[test]
-//     fn upstream_with_both_port_and_ports_fails() {
-//         let mut c = base_config();
-//         c.upstream = Some(UpstreamConfig {
-//             port: Some(3000),
-//             ports: Some(vec![3001]),
-//             service_timeout: None,
-//         });
-//         assert!(validate_config(&c).is_err());
-//     }
-// }
+    #[test]
+    fn upstream_with_both_port_and_ports_fails() {
+        let mut c = base_config();
+        c.upstream = Some(UpstreamConfig {
+            port: Some(3000),
+            ports: Some(vec![3001]),
+            service_timeout: None,
+        });
+        assert!(validate_config(&c).is_err());
+    }
+
+    #[test]
+    fn listens_port_without_matching_upstream_section_fails() {
+        let mut c = base_config();
+        c.listen_port = None;
+        c.listens_port = Some(vec![80, 443]);
+        // no upstream_80 / upstream_443 sections in `upstreams`
+        assert!(validate_config(&c).is_err());
+    }
+
+    #[test]
+    fn listens_port_with_matching_upstream_sections_passes() {
+        let mut c = base_config();
+        c.listen_port = None;
+        c.listens_port = Some(vec![80, 443]);
+        c.upstream = None;
+        c.upstreams.insert(
+            "upstream_80".to_string(),
+            UpstreamConfig {
+                port: Some(3000),
+                ports: None,
+                service_timeout: None,
+            },
+        );
+        c.upstreams.insert(
+            "upstream_443".to_string(),
+            UpstreamConfig {
+                port: Some(3001),
+                ports: None,
+                service_timeout: None,
+            },
+        );
+        assert!(validate_config(&c).is_ok());
+    }
+
+    #[test]
+    fn acme_without_email_fails() {
+        let mut c = base_config();
+        c.ssl = Some(SslConfig {
+            cert: None,
+            key: None,
+            acme: Some(true),
+            acme_email: None,
+            acme_domains: Some(vec!["example.com".to_string()]),
+            acme_cache: None,
+        });
+        assert!(validate_config(&c).is_err());
+    }
+
+    #[test]
+    fn manual_ssl_without_cert_or_key_fails() {
+        let mut c = base_config();
+        c.ssl = Some(SslConfig {
+            cert: None,
+            key: None,
+            acme: Some(false),
+            acme_email: None,
+            acme_domains: None,
+            acme_cache: None,
+        });
+        assert!(validate_config(&c).is_err());
+    }
+}
