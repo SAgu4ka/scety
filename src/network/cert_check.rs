@@ -1,4 +1,5 @@
 use crate::config::get_services_config::ClientConfig;
+use rustls_pki_types::pem::PemObject;
 use std::fs;
 use std::sync::Arc;
 use tokio_rustls::rustls::RootCertStore;
@@ -178,8 +179,7 @@ fn check_trust_chain(
     if let Some(bundle_path) = extra_ca_bundle {
         let bundle_bytes = fs::read(bundle_path)
             .map_err(|e| format!("failed to read trusted_ca_bundle {bundle_path}: {e}"))?;
-        let mut reader = std::io::BufReader::new(bundle_bytes.as_slice());
-        for cert in rustls_pemfile::certs(&mut reader) {
+        for cert in CertificateDer::pem_slice_iter(&bundle_bytes) {
             let cert = cert.map_err(|e| format!("ошибка парсинга trusted_ca_bundle: {e}"))?;
             roots
                 .add(cert)

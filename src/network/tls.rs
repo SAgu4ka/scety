@@ -1,15 +1,10 @@
 use crate::config::get_services_config::SslConfig;
 use crate::config::settings::MAIN_SCETY_PATH;
-use rustls_pemfile::{certs, private_key};
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
-use tokio_rustls::rustls::{
-    ServerConfig,
-    pki_types::{CertificateDer, PrivateKeyDer},
-};
+use tokio_rustls::rustls::ServerConfig;
 use tracing::info;
 
 pub fn load_manual_tls(ssl: &SslConfig) -> Result<TlsAcceptor, Box<dyn std::error::Error>> {
@@ -27,10 +22,7 @@ pub fn load_manual_tls(ssl: &SslConfig) -> Result<TlsAcceptor, Box<dyn std::erro
 }
 
 fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, Box<dyn std::error::Error>> {
-    let file = File::open(Path::new(path))?;
-    let mut reader = BufReader::new(file);
-    let result: Result<Vec<_>, _> = certs(&mut reader).collect();
-    let certs = result?;
+    let certs: Vec<_> = CertificateDer::pem_file_iter(path)?.collect::<Result<_, _>>()?;
     if certs.is_empty() {
         return Err(format!("No certificates found in {}", path).into());
     }
@@ -39,10 +31,7 @@ fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, Box<dyn std::e
 }
 
 fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>, Box<dyn std::error::Error>> {
-    let file = File::open(Path::new(path))?;
-    let mut reader = BufReader::new(file);
-    let key =
-        private_key(&mut reader)?.ok_or_else(|| format!("No private key found in {}", path))?;
+    let key = PrivateKeyDer::from_pem_file(path)?;
     info!(path=%path, "Loaded TLS private key");
     Ok(key)
 }
