@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 pub static SCETY_CONFIG: OnceLock<ScetyConfig> = OnceLock::new();
 
@@ -101,6 +101,20 @@ impl ScetyConfig {
             (None, None, Some(f)) => (f, f, true),
             (None, None, None) => (Some(DEFAULT), Some(DEFAULT), false),
         };
+
+        debug!(
+            ip_limitation = ?ip_limitation, 
+            max_host_labels = ?max_host_labels, 
+            client_headers_timeout = ?final_headers, 
+            client_body_timeout = ?final_body,
+            client_full_timeout = ?full_raw.as_ref().and_then(|o| o.as_ref()), 
+            client_use_full_timeout = ?use_full_timeout,
+            client_header_buffer = ?client_header_buffer,
+            trusted_ca_bundle = ?tls.trusted_ca_bundle,
+            global_upstream_headers = ?headers.upstream,
+            global_response_headers = ?headers.response,
+            "Main security config was created successfully"
+        );
 
         Self {
             ip_limitation,

@@ -1,6 +1,7 @@
 use tracing::{info, warn};
 
 pub async fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
+    info!("Start uninstalling scety... (T_T)");
     if !std::path::Path::new("/etc/systemd/system/scety.service").exists() {
         warn!("Scety is not installed");
         return Err("Scety is not installed".into());
@@ -11,6 +12,7 @@ pub async fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
         .output()?;
 
     if status.stdout.trim_ascii() == b"active" {
+        info!("Stoping scety before uninstall...");
         std::process::Command::new("systemctl")
             .args(["stop", "scety"])
             .status()?;
@@ -26,6 +28,6 @@ pub async fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
         .args(["daemon-reload"])
         .status()?;
 
-    info!("Scety successfully uninstalled");
+    info!("Scety successfully uninstalled... (T_T)");
     Ok(())
 }

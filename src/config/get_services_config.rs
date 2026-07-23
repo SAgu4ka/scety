@@ -73,7 +73,9 @@ fn get_all_config_paths() -> Vec<PathBuf> {
         .collect()
 }
 
-pub fn get_all_configs() -> Vec<ClientConfig> {
+pub fn get_all_configs(validate: Option<bool>) -> Vec<ClientConfig> {
+    let validate = validate.unwrap_or(true);
+
     let mut vec_confs = Vec::new();
     let all_configs = get_all_config_paths();
     info!(
@@ -98,7 +100,7 @@ pub fn get_all_configs() -> Vec<ClientConfig> {
             }
         };
 
-        if let Err(e) = validate_config(&config) {
+        if validate && let Err(e) = validate_config(&config) {
             error!(error=%e, file=%conf.to_string_lossy(), "Configuration validation failed");
             continue;
         }
