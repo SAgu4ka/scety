@@ -1,10 +1,9 @@
 use crate::config::get_scety_config::scety_config;
+use crate::config::settings::HTTP_CODE_TABLE;
 use crate::core::response::HttpResponse;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::OnceLock;
-
-const TOML_SOURCE: &str = include_str!("../models/http_code_table/default.toml");
 
 #[derive(Deserialize)]
 struct RawStatusRegistry {
@@ -16,7 +15,7 @@ static STATUS_MAP: OnceLock<HashMap<u16, String>> = OnceLock::new();
 pub fn get_status_message(code: u16) -> &'static str {
     let map = STATUS_MAP.get_or_init(|| {
         let registry: RawStatusRegistry =
-            toml::from_str(TOML_SOURCE).expect("Critical error: default.toml is invalid!");
+            toml::from_str(HTTP_CODE_TABLE).expect("Critical error: default.toml is invalid!");
 
         registry
             .statuses

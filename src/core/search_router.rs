@@ -3,6 +3,7 @@ use crate::core::host_router::HostRouter;
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::Mutex;
+use tracing::{debug, info};
 
 pub struct SearchRouter {
     router: HostRouter,
@@ -14,15 +15,18 @@ pub struct SearchRouter {
 impl SearchRouter {
     pub fn new(configs: Vec<ClientConfig>) -> Self {
         let mut router = HostRouter::new();
+        info!("HostRouter object was created");
 
         for (index, config) in configs.iter().enumerate() {
             if let Some(host) = &config.host {
                 router.add_pattern(host, index);
+                debug!(pattern=host, index=%index, "Host pattern was added");
             }
             if let Some(hosts) = &config.hosts {
                 for host in hosts {
                     router.add_pattern(host, index);
                 }
+                debug!(pattern=?hosts.iter().collect::<Vec<_>>(), index=%index, "Heap of host patterns was added");
             }
         }
 

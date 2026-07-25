@@ -103,11 +103,11 @@ impl ScetyConfig {
         };
 
         debug!(
-            ip_limitation = ?ip_limitation, 
-            max_host_labels = ?max_host_labels, 
-            client_headers_timeout = ?final_headers, 
+            ip_limitation = ?ip_limitation,
+            max_host_labels = ?max_host_labels,
+            client_headers_timeout = ?final_headers,
             client_body_timeout = ?final_body,
-            client_full_timeout = ?full_raw.as_ref().and_then(|o| o.as_ref()), 
+            client_full_timeout = ?full_raw.as_ref().and_then(|o| o.as_ref()),
             client_use_full_timeout = ?use_full_timeout,
             client_header_buffer = ?client_header_buffer,
             trusted_ca_bundle = ?tls.trusted_ca_bundle,

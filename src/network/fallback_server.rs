@@ -26,9 +26,11 @@ pub async fn start_fallback_server() -> Result<(), Box<dyn std::error::Error>> {
         Content-Type: text/html; charset=utf-8\r\n\
         Content-Length: {}\r\n\
         Connection: close\r\n\
+        Server: {}\r\n\
         \r\n\
         {}",
         html_body.len(),
+        server_header,
         html_body
     );
     let response = Arc::new(response);

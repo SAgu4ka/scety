@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Mutex, OnceLock};
+use tracing::trace;
 
 static CONNECTIONS: OnceLock<Mutex<HashMap<IpAddr, usize>>> = OnceLock::new();
 
@@ -21,9 +22,11 @@ impl Drop for ConnectionGuard {
         let mut map = connections().lock().unwrap();
         if let Some(count) = map.get_mut(&self.ip) {
             *count = count.saturating_sub(1);
-            if *count == 0 {
+            let remaining = *count;
+            if remaining == 0 {
                 map.remove(&self.ip);
             }
+            trace!(ip=%self.ip, remaining=%remaining, "Connection slot released");
         }
     }
 }
