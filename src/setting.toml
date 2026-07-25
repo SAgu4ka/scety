@@ -3,3 +3,4 @@ expose_version = true
 
 [paths]
 main_scety_path = "/etc/scety"
+http_code_table = "./src/models/http_code_table/default.toml"

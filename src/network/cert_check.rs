@@ -6,7 +6,7 @@ use tokio_rustls::rustls::RootCertStore;
 use tokio_rustls::rustls::client::WebPkiServerVerifier;
 use tokio_rustls::rustls::client::danger::ServerCertVerifier;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use x509_parser::extensions::GeneralName;
 use x509_parser::pem::Pem;
 use x509_parser::prelude::{FromDer, X509Certificate};
@@ -15,6 +15,7 @@ const EXPIRY_WARNING_DAYS: i64 = 14;
 
 pub fn check_all_configured_certs(configs: &[ClientConfig], extra_ca_bundle: Option<&str>) -> bool {
     let mut all_ok = true;
+    let mut checked = 0usize;
 
     for config in configs {
         let hosts = expected_hosts(config);
@@ -24,10 +25,11 @@ pub fn check_all_configured_certs(configs: &[ClientConfig], extra_ca_bundle: Opt
             if ssl.acme.unwrap_or(false) {
                 return;
             }
-            if let Some(cert_path) = &ssl.cert
-                && !check_certificate(&label, cert_path, &hosts, extra_ca_bundle)
-            {
-                all_ok = false;
+            if let Some(cert_path) = &ssl.cert {
+                checked += 1;
+                if !check_certificate(&label, cert_path, &hosts, extra_ca_bundle) {
+                    all_ok = false;
+                }
             }
         };
 
@@ -39,6 +41,7 @@ pub fn check_all_configured_certs(configs: &[ClientConfig], extra_ca_bundle: Opt
         }
     }
 
+    info!(checked=%checked, all_ok=%all_ok, "Finished checking configured certificates");
     all_ok
 }
 

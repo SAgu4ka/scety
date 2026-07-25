@@ -4,7 +4,7 @@ use tracing::{info, warn};
 
 pub async fn check() -> Result<(), Box<dyn std::error::Error>> {
     info!("Checking configuration files...");
-    let all_configs = get_all_configs();
+    let all_configs = get_all_configs(None);
 
     if all_configs.is_empty() {
         warn!(path=%SERVICES_CONFIGS_PATH, "No valid configuration files found");

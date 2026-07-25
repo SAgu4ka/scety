@@ -1,6 +1,6 @@
 [package]
 name = "scety"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/SAgu4ka/scety"
@@ -30,3 +30,13 @@ lru = "0.18"
 x509-parser = "0.18"
 webpki-roots = "1"
 const_format = "0.2.36"
+
+[build-dependencies]
+toml = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"

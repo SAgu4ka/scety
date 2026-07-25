@@ -12,3 +12,5 @@ pub const MAIN_SCETY_PATH: &str = CONFIG.paths.main_scety_path;
 
 pub const SERVICES_CONFIGS_PATH: &str = formatcp!("{}/services", MAIN_SCETY_PATH);
 pub const SCETY_CONFIG_PATH: &str = formatcp!("{}/scety.toml", MAIN_SCETY_PATH);
+
+include!(concat!(env!("OUT_DIR"), "/generated_code_table.rs"));

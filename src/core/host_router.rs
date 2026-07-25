@@ -142,6 +142,7 @@ impl HostRouter {
         }
 
         let owned_labels: Vec<String> = pattern.split('.').map(String::from).collect();
+        warn!(pattern=pattern, index=%index, "You are using a pattern that is difficult to match! Make sure this is truly necessary");
         self.complex_patterns.push((owned_labels, index));
     }
 

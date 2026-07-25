@@ -33,7 +33,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         debug!("Start load configs...");
-        let all_configs = get_all_configs();
+        let all_configs = get_all_configs(None);
 
         debug!("Checking configured TLS certificates...");
         if !crate::network::cert_check::check_all_configured_certs(
@@ -43,7 +43,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .as_deref(),
         ) {
             warn!(
-                "Обнаружены проблемы с TLS-сертификатами (см. предупреждения выше). scety всё равно продолжит запуск — это не блокирующая проверка."
+                "Issues with TLS certificates have been detected (see the note above). Scety will proceed with startup regardless—this is not a blocking check."
             );
         }
 
