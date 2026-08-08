@@ -10,8 +10,8 @@ mod cli;
 mod config;
 mod core;
 mod http;
+mod l4;
 mod network;
-mod L4;
 
 async fn run_command<F, Fut>(f: F)
 where

@@ -1,0 +1,1660 @@
+=== FILE: ./mod.rs ===
+#![allow(dead_code)]
+
+pub mod backend;
+pub mod config;
+pub mod engine;
+pub mod health;
+pub mod lb;
+
+pub use config::L4ServiceConfig;
+// `start_l4_listen` is exposed via `L4ServiceManager::start`.
+
+pub struct L4ServiceManager;
+
+impl L4ServiceManager {
+    pub fn start(
+        configs: Vec<L4ServiceConfig>,
+    ) -> Vec<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        crate::l4::engine::start_l4_listen(configs)
+    }
+
+    pub fn start_mio(configs: Vec<L4ServiceConfig>) -> Vec<std::sync::Arc<std::sync::atomic::AtomicBool> > {
+        crate::l4::engine::start_mio_listen(configs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    use crate::l4::backend::{BackendNode, ConnectionGuard};
+    use crate::l4::engine::proxy_protocol::ProxyProtocol;
+    use crate::l4::lb::{LeastConnectionsLB, RoundRobinLB};
+    use crate::l4::lb::LoadBalancer;
+
+    #[test]
+    fn test_connection_guard_counts() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+        let node = Arc::new(BackendNode::new(addr));
+
+        assert_eq!(node.active_conns.load(std::sync::atomic::Ordering::Relaxed), 0);
+        {
+            let _g = ConnectionGuard::new(node.clone());
+            assert_eq!(node.active_conns.load(std::sync::atomic::Ordering::Relaxed), 1);
+        }
+        assert_eq!(node.active_conns.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_mark_failure_threshold() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081);
+        let node = BackendNode::new(addr);
+        assert!(node.is_healthy.load(std::sync::atomic::Ordering::Relaxed));
+        node.mark_failure(2);
+        assert!(node.is_healthy.load(std::sync::atomic::Ordering::Relaxed));
+        node.mark_failure(2);
+        assert!(!node.is_healthy.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_round_robin_selection() {
+        let addrs = (10000..10003)
+            .map(|p| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), p))
+            .collect::<Vec<_>>();
+        let nodes = addrs.iter().map(|a| Arc::new(BackendNode::new(*a))).collect();
+        let lb = RoundRobinLB::new(nodes);
+        // select three times, should cycle
+        let c1 = lb.select(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1)).unwrap();
+        let c2 = lb.select(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1)).unwrap();
+        let c3 = lb.select(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1)).unwrap();
+        assert_ne!(c1.addr, c2.addr);
+        assert_ne!(c2.addr, c3.addr);
+    }
+
+    #[test]
+    fn test_least_conn_selection() {
+        let addrs = (11000..11003)
+            .map(|p| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), p))
+            .collect::<Vec<_>>();
+        let nodes = addrs
+            .iter()
+            .map(|a| Arc::new(BackendNode::new(*a)))
+            .collect::<Vec<_>>();
+
+        // bump active_conns on first node
+        nodes[0].active_conns.fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+        let lb = LeastConnectionsLB::new(nodes.clone());
+        let sel = lb.select(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1)).unwrap();
+        assert_eq!(sel.addr, nodes[1].addr);
+    }
+
+    #[test]
+    fn test_proxy_v2_header_lengths() {
+        let client = SocketAddr::from_str("127.0.0.1:12345").unwrap();
+        let dest = SocketAddr::from_str("127.0.0.1:80").unwrap();
+        let h = ProxyProtocol::build_v2_header(client, dest);
+        // signature(12) + v/c(1) + fam/proto(1) + len(2) + payload(12) = 28
+        assert_eq!(h.len(), 28);
+        assert!(h.starts_with(b"\r\n\r\n\x00\r\nQUIT\n"));
+    }
+}
+
+=== FILE: ./config.rs ===
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::net::SocketAddr;
+use std::time::Duration;
+use toml::Value;
+use tracing::{error, info};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L4ServiceConfig {
+    pub name: String,
+    pub bind: SocketAddr,
+    pub protocol: L4Protocol,
+    pub reuse_port: bool,
+    pub tcp_nodelay: bool,
+    pub zero_copy: bool,
+    pub upstreams: Vec<SocketAddr>,
+    pub lb_strategy: LbStrategy,
+    pub send_proxy_protocol: Option<ProxyProtocolVersion>,
+    pub connect_timeout: Duration,
+    pub idle_timeout: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum L4Protocol {
+    Tcp,
+    Udp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LbStrategy {
+    RoundRobin,
+    LeastConnections,
+    IpHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProxyProtocolVersion {
+    V1,
+    V2,
+}
+
+pub fn validate_l4_configs(configs: &[Value]) -> bool {
+    let mut has_errors = false;
+    let mut l4_count = 0;
+    let mut seen_names = HashSet::new();
+    let mut seen_binds = HashSet::new();
+
+    for (idx, cnfg) in configs.iter().enumerate() {
+        let table = match cnfg.as_table() {
+            Some(t) => t,
+            None => {
+                error!(
+                    config_idx = idx,
+                    "Configuration root must be a valid TOML table"
+                );
+                has_errors = true;
+                continue;
+            }
+        };
+
+        let is_l4 = table
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("proxy_type"))
+            .and_then(|(_, v)| v.as_str())
+            .map(|s| s.eq_ignore_ascii_case("L4"))
+            .unwrap_or(false);
+
+        if !is_l4 {
+            continue;
+        }
+
+        l4_count += 1;
+
+        let name = match get_str_case_insensitive(table, "name") {
+            Some(n) if !n.trim().is_empty() => n.trim(),
+            _ => {
+                error!(config_idx = idx, "Missing or empty required field 'name'");
+                has_errors = true;
+                continue;
+            }
+        };
+
+        if !seen_names.insert(name.to_string()) {
+            error!(service = %name, "Duplicate service name found");
+            has_errors = true;
+        }
+
+        let bind_str = match get_str_case_insensitive(table, "bind") {
+            Some(b) => b,
+            None => {
+                error!(service = %name, "Missing required field 'bind'");
+                has_errors = true;
+                continue;
+            }
+        };
+
+        let bind_addr: SocketAddr = match bind_str.parse() {
+            Ok(addr) => addr,
+            Err(e) => {
+                error!(service = %name, bind = %bind_str, error = %e, "Invalid 'bind' address format (expected IP:Port)");
+                has_errors = true;
+                continue;
+            }
+        };
+
+        if !seen_binds.insert(bind_addr) {
+            error!(service = %name, bind = %bind_addr, "Address 'bind' is already assigned to another L4 service");
+            has_errors = true;
+        }
+
+        let upstreams_val = match get_field_case_insensitive(table, "upstreams") {
+            Some(v) => v,
+            None => {
+                error!(service = %name, "Missing required field 'upstreams'");
+                has_errors = true;
+                continue;
+            }
+        };
+
+        let mut valid_upstreams_count = 0;
+        if let Some(arr) = upstreams_val.as_array() {
+            for (u_idx, item) in arr.iter().enumerate() {
+                if let Some(s) = item.as_str() {
+                    if s.parse::<SocketAddr>().is_ok() {
+                        valid_upstreams_count += 1;
+                    } else {
+                        error!(service = %name, upstream = %s, upstream_idx = u_idx, "Invalid upstream address format (expected IP:Port)");
+                        has_errors = true;
+                    }
+                } else {
+                    error!(service = %name, upstream_idx = u_idx, "Upstream entry must be a string");
+                    has_errors = true;
+                }
+            }
+        } else {
+            error!(service = %name, "Field 'upstreams' must be an array of strings");
+            has_errors = true;
+        }
+
+        if valid_upstreams_count == 0 {
+            error!(service = %name, "Service 'upstreams' array contains no valid SocketAddr entries");
+            has_errors = true;
+        }
+    }
+
+    if !has_errors {
+        info!(
+            validated_services = l4_count,
+            "L4 configuration check passed successfully"
+        );
+    } else {
+        error!("L4 configuration check failed due to validation errors");
+    }
+
+    !has_errors
+}
+
+pub async fn parse_l4_confs(configs: Vec<Value>) -> Vec<L4ServiceConfig> {
+    if !validate_l4_configs(&configs) {
+        error!("Aborting L4 configuration parsing due to validation errors");
+        return Vec::new();
+    }
+
+    let mut ready_cfgs = Vec::new();
+
+    for cnfg in configs {
+        let table = match cnfg.as_table() {
+            Some(t) => t,
+            None => continue,
+        };
+
+        let is_l4 = table
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("proxy_type"))
+            .and_then(|(_, v)| v.as_str())
+            .map(|s| s.eq_ignore_ascii_case("L4"))
+            .unwrap_or(false);
+
+        if !is_l4 {
+            continue;
+        }
+
+        let name = match get_str_case_insensitive(table, "name") {
+            Some(n) => n.trim().to_string(),
+            None => continue,
+        };
+
+        let bind_addr: SocketAddr =
+            match get_str_case_insensitive(table, "bind").and_then(|b| b.parse().ok()) {
+                Some(addr) => addr,
+                None => continue,
+            };
+
+        let upstreams_val =
+            match get_field_case_insensitive(table, "upstreams").and_then(|v| v.as_array()) {
+                Some(arr) => arr,
+                None => continue,
+            };
+
+        let parsed_upstreams: Vec<SocketAddr> = upstreams_val
+            .iter()
+            .filter_map(|item| item.as_str())
+            .filter_map(|s| s.parse().ok())
+            .collect();
+
+        if parsed_upstreams.is_empty() {
+            continue;
+        }
+
+        let protocol = get_str_case_insensitive(table, "protocol")
+            .map(|s| match s.to_lowercase().as_str() {
+                "udp" => L4Protocol::Udp,
+                _ => L4Protocol::Tcp,
+            })
+            .unwrap_or(L4Protocol::Tcp);
+
+        let reuse_port = get_bool_case_insensitive(table, "reuse_port").unwrap_or(true);
+        let tcp_nodelay = get_bool_case_insensitive(table, "tcp_nodelay").unwrap_or(true);
+        let zero_copy = get_bool_case_insensitive(table, "zero_copy").unwrap_or(true);
+
+        let lb_strategy = get_str_case_insensitive(table, "lb_strategy")
+            .map(|s| match s.to_lowercase().as_str() {
+                "round_robin" | "rr" => LbStrategy::RoundRobin,
+                "ip_hash" => LbStrategy::IpHash,
+                _ => LbStrategy::LeastConnections,
+            })
+            .unwrap_or(LbStrategy::LeastConnections);
+
+        let send_proxy_protocol =
+            get_str_case_insensitive(table, "send_proxy_protocol").and_then(|s| {
+                match s.to_lowercase().as_str() {
+                    "v1" => Some(ProxyProtocolVersion::V1),
+                    "v2" => Some(ProxyProtocolVersion::V2),
+                    _ => None,
+                }
+            });
+
+        let connect_timeout_secs = get_int_case_insensitive(table, "connect_timeout").unwrap_or(3);
+        let idle_timeout_secs = get_int_case_insensitive(table, "idle_timeout").unwrap_or(300);
+
+        ready_cfgs.push(L4ServiceConfig {
+            name,
+            bind: bind_addr,
+            protocol,
+            reuse_port,
+            tcp_nodelay,
+            zero_copy,
+            upstreams: parsed_upstreams,
+            lb_strategy,
+            send_proxy_protocol,
+            connect_timeout: Duration::from_secs(connect_timeout_secs as u64),
+            idle_timeout: Duration::from_secs(idle_timeout_secs as u64),
+        });
+    }
+
+    ready_cfgs
+}
+
+fn get_field_case_insensitive<'a>(
+    table: &'a toml::map::Map<String, Value>,
+    key: &str,
+) -> Option<&'a Value> {
+    table.iter().find_map(|(k, v)| {
+        if k.eq_ignore_ascii_case(key) {
+            Some(v)
+        } else {
+            None
+        }
+    })
+}
+
+fn get_str_case_insensitive<'a>(
+    table: &'a toml::map::Map<String, Value>,
+    key: &str,
+) -> Option<&'a str> {
+    get_field_case_insensitive(table, key).and_then(|v| v.as_str())
+}
+
+fn get_bool_case_insensitive(table: &toml::map::Map<String, Value>, key: &str) -> Option<bool> {
+    get_field_case_insensitive(table, key).and_then(|v| v.as_bool())
+}
+
+fn get_int_case_insensitive(table: &toml::map::Map<String, Value>, key: &str) -> Option<i64> {
+    get_field_case_insensitive(table, key).and_then(|v| v.as_integer())
+}
+
+=== FILE: ./backend.rs ===
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use tracing::{debug, warn};
+
+#[derive(Debug)]
+pub struct BackendNode {
+    pub addr: SocketAddr,
+    pub weight: u32,
+    pub is_healthy: AtomicBool,
+    pub active_conns: AtomicUsize,
+    pub consecutive_successes: AtomicUsize,
+    pub consecutive_failures: AtomicUsize,
+    pub total_conns: AtomicU64,
+}
+
+impl BackendNode {
+    pub fn new(addr: SocketAddr) -> Self {
+        Self {
+            addr,
+            weight: 1,
+            is_healthy: AtomicBool::new(true),
+            active_conns: AtomicUsize::new(0),
+            consecutive_successes: AtomicUsize::new(0),
+            consecutive_failures: AtomicUsize::new(0),
+            total_conns: AtomicU64::new(0),
+        }
+    }
+
+    /// Called when an operation to this backend succeeded.
+    /// If `rise_threshold` consecutive successes observed, node is marked healthy.
+    pub fn mark_success(&self, rise_threshold: usize) {
+        // clear failures, increment successes with release semantics
+        self.consecutive_failures.store(0, Ordering::Release);
+        let succ = self.consecutive_successes.fetch_add(1, Ordering::AcqRel) + 1;
+        if succ >= rise_threshold {
+            self.is_healthy.store(true, Ordering::Release);
+            self.consecutive_successes.store(0, Ordering::Release);
+            debug!(upstream = %self.addr, "Backend marked healthy after {} successes", rise_threshold);
+        }
+    }
+
+    /// Called when an operation to this backend failed.
+    /// If `fall_threshold` consecutive failures observed, node is marked unhealthy.
+    pub fn mark_failure(&self, fall_threshold: usize) {
+        // clear successes, increment failures with acquire/release semantics
+        self.consecutive_successes.store(0, Ordering::Release);
+        let fails = self.consecutive_failures.fetch_add(1, Ordering::AcqRel) + 1;
+        if fails >= fall_threshold {
+            self.is_healthy.store(false, Ordering::Release);
+            warn!(upstream = %self.addr, "Backend marked unhealthy after {} failures", fall_threshold);
+        }
+    }
+}
+
+pub struct ConnectionGuard {
+    node: Arc<BackendNode>,
+}
+
+impl ConnectionGuard {
+    pub fn new(node: Arc<BackendNode>) -> Self {
+        node.active_conns.fetch_add(1, Ordering::Relaxed);
+        node.total_conns.fetch_add(1, Ordering::Relaxed);
+        Self { node }
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.node.active_conns.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+=== FILE: ./lb/mod.rs ===
+pub mod least_conn;
+pub mod round_robin;
+pub mod ip_hash;
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use crate::l4::backend::BackendNode;
+use crate::l4::config::LbStrategy;
+pub use least_conn::LeastConnectionsLB;
+pub use round_robin::RoundRobinLB;
+pub use ip_hash::IpHashLB;
+
+pub trait LoadBalancer: Send + Sync {
+    fn select(&self, client_addr: SocketAddr) -> Option<Arc<BackendNode>>;
+}
+
+pub fn create_load_balancer(
+    strategy: LbStrategy,
+    nodes: Vec<Arc<BackendNode>>,
+) -> Arc<dyn LoadBalancer> {
+    match strategy {
+        LbStrategy::RoundRobin => Arc::new(RoundRobinLB::new(nodes)),
+        LbStrategy::LeastConnections => Arc::new(LeastConnectionsLB::new(nodes)),
+        LbStrategy::IpHash => Arc::new(IpHashLB::new(nodes)),
+    }
+}
+
+=== FILE: ./lb/round_robin.rs ===
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use super::LoadBalancer;
+use crate::l4::backend::BackendNode;
+
+pub struct RoundRobinLB {
+    nodes: Vec<Arc<BackendNode>>,
+    index: AtomicUsize,
+}
+
+impl RoundRobinLB {
+    pub fn new(nodes: Vec<Arc<BackendNode>>) -> Self {
+        Self {
+            nodes,
+            index: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl LoadBalancer for RoundRobinLB {
+    fn select(&self, _client_addr: SocketAddr) -> Option<Arc<BackendNode>> {
+        let healthy: Vec<_> = self
+            .nodes
+            .iter()
+            .filter(|n| n.is_healthy.load(Ordering::Relaxed))
+            .collect();
+
+        if healthy.is_empty() {
+            return None;
+        }
+
+        let idx = self.index.fetch_add(1, Ordering::Relaxed) % healthy.len();
+        Some(healthy[idx].clone())
+    }
+}
+
+=== FILE: ./lb/least_conn.rs ===
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use super::LoadBalancer;
+use crate::l4::backend::BackendNode;
+
+pub struct LeastConnectionsLB {
+    nodes: Vec<Arc<BackendNode>>,
+}
+
+impl LeastConnectionsLB {
+    pub fn new(nodes: Vec<Arc<BackendNode>>) -> Self {
+        Self { nodes }
+    }
+}
+
+impl LoadBalancer for LeastConnectionsLB {
+    fn select(&self, _client_addr: SocketAddr) -> Option<Arc<BackendNode>> {
+        self.nodes
+            .iter()
+            .filter(|n| n.is_healthy.load(Ordering::Relaxed))
+            .min_by_key(|n| n.active_conns.load(Ordering::Relaxed))
+            .cloned()
+    }
+}
+
+=== FILE: ./lb/ip_hash.rs ===
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::hash::{Hasher, BuildHasherDefault, BuildHasher};
+
+use crate::l4::backend::BackendNode;
+use super::LoadBalancer;
+
+#[derive(Debug)]
+pub struct IpHashLB {
+    nodes: Vec<Arc<BackendNode>>,
+    hasher_builder: BuildHasherDefault<fxhash::FxHasher>,
+}
+
+impl IpHashLB {
+    pub fn new(nodes: Vec<Arc<BackendNode>>) -> Self {
+        Self { nodes, hasher_builder: Default::default() }
+    }
+}
+
+impl LoadBalancer for IpHashLB {
+    fn select(&self, client_addr: SocketAddr) -> Option<Arc<BackendNode>> {
+        use std::net::IpAddr;
+        let healthy: Vec<_> = self.nodes.iter().filter(|n| n.is_healthy.load(std::sync::atomic::Ordering::Relaxed)).collect();
+        if healthy.is_empty() { return None; }
+
+        let ip_bytes = match client_addr.ip() {
+            IpAddr::V4(a) => a.octets().to_vec(),
+            IpAddr::V6(a) => a.octets().to_vec(),
+        };
+
+        let mut hasher = self.hasher_builder.build_hasher();
+        hasher.write(&ip_bytes);
+        let h = hasher.finish() as usize;
+        Some(healthy[h % healthy.len()].clone())
+    }
+}
+
+=== FILE: ./engine/mod.rs ===
+pub mod proxy_protocol;
+pub mod pipe;
+pub mod mio_worker;
+pub mod udp_sessions;
+pub mod timer_wheel;
+
+use tracing::info;
+
+use crate::l4::config::L4ServiceConfig;
+use crate::l4::engine::mio_worker::MioL4Worker;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
+pub fn start_l4_listen(configs: Vec<L4ServiceConfig>) -> Vec<Arc<AtomicBool>> {
+    // By default, start mio thread-per-core workers for given configs.
+    start_mio_listen(configs)
+}
+
+/// Start Thread-per-Core mio-based workers for given configs.
+pub fn start_mio_listen(configs: Vec<L4ServiceConfig>) -> Vec<Arc<AtomicBool>> {
+    let mut handles = Vec::new();
+    for config in configs {
+        info!(bind = %config.bind, service = %config.name, "Initializing mio L4 engine service");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        MioL4Worker::spawn_thread_per_core(config, shutdown.clone());
+        handles.push(shutdown);
+    }
+    handles
+}
+
+=== FILE: ./engine/proxy_protocol.rs ===
+use std::net::SocketAddr;
+
+pub struct ProxyProtocol;
+
+impl ProxyProtocol {
+    pub fn build_v1_header(client_addr: SocketAddr, dest_addr: SocketAddr) -> Vec<u8> {
+        let family = if client_addr.is_ipv4() {
+            "TCP4"
+        } else {
+            "TCP6"
+        };
+        format!(
+            "PROXY {} {} {} {} {}\r\n",
+            family,
+            client_addr.ip(),
+            dest_addr.ip(),
+            client_addr.port(),
+            dest_addr.port()
+        )
+        .into_bytes()
+    }
+
+    pub fn build_v2_header(client_addr: SocketAddr, dest_addr: SocketAddr) -> Vec<u8> {
+        const SIG: &[u8; 12] = b"\r\n\r\n\x00\r\nQUIT\n";
+
+        let mut buf = Vec::with_capacity(64);
+        buf.extend_from_slice(SIG);
+
+        buf.push(0x20 | 0x01);
+
+        if client_addr.is_ipv4() && dest_addr.is_ipv4() {
+            buf.push((0x1 << 4) | 0x1);
+            buf.extend_from_slice(&(12u16.to_be_bytes()));
+
+            if let (std::net::IpAddr::V4(cip), std::net::IpAddr::V4(dip)) =
+                (client_addr.ip(), dest_addr.ip())
+            {
+                buf.extend_from_slice(&cip.octets());
+                buf.extend_from_slice(&dip.octets());
+                buf.extend_from_slice(&client_addr.port().to_be_bytes());
+                buf.extend_from_slice(&dest_addr.port().to_be_bytes());
+            }
+        } else if client_addr.is_ipv6() && dest_addr.is_ipv6() {
+            buf.push((0x2 << 4) | 0x1);
+            buf.extend_from_slice(&(36u16.to_be_bytes()));
+
+            if let (std::net::IpAddr::V6(cip), std::net::IpAddr::V6(dip)) =
+                (client_addr.ip(), dest_addr.ip())
+            {
+                for seg in &cip.octets() {
+                    buf.push(*seg);
+                }
+                for seg in &dip.octets() {
+                    buf.push(*seg);
+                }
+                buf.extend_from_slice(&client_addr.port().to_be_bytes());
+                buf.extend_from_slice(&dest_addr.port().to_be_bytes());
+            }
+        } else {
+            buf.push(0x00);
+            buf.extend_from_slice(&0u16.to_be_bytes());
+        }
+
+        buf
+    }
+}
+
+=== FILE: ./engine/mio_worker.rs ===
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}, Mutex};
+use std::thread;
+use std::time::Duration;
+
+use mio::{Events, Interest, Poll, Token, Waker};
+use mio::net::TcpListener as MioTcpListener;
+use slab::Slab;
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+use socket2::{Domain, Protocol, Socket, Type};
+use tracing::{info, debug, error};
+
+use crate::l4::config::L4ServiceConfig;
+use crate::l4::engine::pipe::PipeFd;
+use crate::l4::engine::udp_sessions::UdpSessionMap;
+use crate::l4::lb::create_load_balancer;
+use crate::l4::health::PassiveHealthTracker;
+
+use mio::unix::SourceFd as MioSourceFd;
+
+struct Conn {
+    client_fd: RawFd,
+    upstream_fd: RawFd,
+    state: ConnState,
+}
+
+#[derive(PartialEq, Eq)]
+enum ConnState {
+    Connecting,
+    Established,
+}
+
+pub struct MioL4Worker;
+
+impl MioL4Worker {
+    /// Spawn one thread-per-core for each config (each thread binds with SO_REUSEPORT).
+    pub fn spawn_thread_per_core(config: L4ServiceConfig, shutdown: Arc<AtomicBool>) {
+        thread::spawn(move || {
+            let cores = num_cpus::get();
+            info!(service = %config.name, cores = cores, "Starting Thread-per-Core worker");
+
+            // Each OS thread will create its own listener bound to the same address with SO_REUSEPORT
+            let mut handles = Vec::with_capacity(cores);
+
+            for i in 0..cores {
+                let cfg = config.clone();
+                let sdn = shutdown.clone();
+                let handle = thread::spawn(move || {
+                    if let Err(e) = Self::worker_loop(i, cfg, sdn) {
+                        error!(worker = i, error = %e, "Worker loop exited with error");
+                    }
+                });
+                handles.push(handle);
+            }
+
+            for h in handles {
+                let _ = h.join();
+            }
+        });
+    }
+
+    fn worker_loop(thread_id: usize, config: L4ServiceConfig, shutdown: Arc<AtomicBool>) -> std::io::Result<()> {
+        // If this service is UDP, run a lightweight UDP forwarder loop
+        if config.protocol == crate::l4::config::L4Protocol::Udp {
+            let domain = if config.bind.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+            let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+            socket.set_reuse_address(true)?;
+            if config.reuse_port {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::io::AsRawFd;
+                    let fd = socket.as_raw_fd();
+                    let val: libc::c_int = 1;
+                    unsafe {
+                        let _ = libc::setsockopt(
+                            fd,
+                            libc::SOL_SOCKET,
+                            libc::SO_REUSEPORT,
+                            &val as *const _ as *const libc::c_void,
+                            std::mem::size_of_val(&val) as libc::socklen_t,
+                        );
+                    }
+                }
+            }
+            socket.set_nonblocking(true)?;
+            socket.bind(&config.bind.into())?;
+
+            let raw = socket.into_raw_fd();
+            let std_udp = unsafe { std::net::UdpSocket::from_raw_fd(raw) };
+            std_udp.set_nonblocking(true)?;
+            let mut mio_udp = mio::net::UdpSocket::from_std(std_udp);
+
+            let mut poll = Poll::new()?;
+            const UDP_SOCKET: Token = Token(0);
+            const WAKER: Token = Token(usize::MAX);
+            poll.registry().register(&mut mio_udp, UDP_SOCKET, Interest::READABLE)?;
+
+            // session map and timer wheel
+            let udp_map = Arc::new(std::sync::Mutex::new(UdpSessionMap::new(config.idle_timeout)));
+            let wheel = Arc::new(std::sync::Mutex::new(crate::l4::engine::timer_wheel::TimerWheel::new(64)));
+
+            // build backends and lb
+            let nodes: Vec<Arc<crate::l4::backend::BackendNode>> = config
+                .upstreams
+                .iter()
+                .map(|addr| Arc::new(crate::l4::backend::BackendNode::new(*addr)))
+                .collect();
+
+            crate::l4::health::HealthOrchestrator::spawn_blocking(
+                nodes.clone(),
+                Duration::from_secs(5),
+                config.connect_timeout,
+                shutdown.clone(),
+            );
+
+            let lb = create_load_balancer(config.lb_strategy.clone(), nodes);
+            let passive_tracker = PassiveHealthTracker::new(3);
+
+            // waker + watcher for eviction
+            let w = Waker::new(poll.registry(), WAKER)?;
+            let waker = Arc::new(w);
+            {
+                let sdn = shutdown.clone();
+                let wk = waker.clone();
+                let udp_map_clone = udp_map.clone();
+                let wheel_clone = wheel.clone();
+                std::thread::spawn(move || {
+                    let mut last_evict = std::time::Instant::now();
+                    loop {
+                        if sdn.load(Ordering::Relaxed) {
+                            let _ = wk.wake();
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(250));
+                        if last_evict.elapsed() >= Duration::from_secs(1) {
+                            last_evict = std::time::Instant::now();
+                            if let Ok(mut m) = udp_map_clone.lock() {
+                                let removed = m.evict_expired();
+                                if removed > 0 {
+                                    let _ = wk.wake();
+                                }
+                            }
+                            if let Ok(mut w) = wheel_clone.lock() {
+                                let expired = w.tick();
+                                if !expired.is_empty() {
+                                    let _ = wk.wake();
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            let mut events = Events::with_capacity(1024);
+            let mut buf = vec![0u8; 65536];
+
+            while !shutdown.load(Ordering::Relaxed) {
+                poll.poll(&mut events, Some(Duration::from_millis(200)))?;
+                for ev in &events {
+                    if ev.token() == WAKER { continue; }
+
+                    if ev.token() == UDP_SOCKET && ev.is_readable() {
+                        loop {
+                            match mio_udp.recv_from(&mut buf) {
+                                Ok((n, src)) => {
+                                    let data = &buf[..n];
+                                    // select upstream
+                                    if let Some(node) = lb.select(src) {
+                                        // create or reuse session
+                                        let mut m = udp_map.lock().unwrap();
+                                        if let Some(up_fd) = m.touch(src) {
+                                            // send via upstream fd
+                                            let sret = unsafe {
+                                                libc::send(up_fd, data.as_ptr() as *const libc::c_void, data.len(), 0)
+                                            };
+                                            if sret >= 0 {
+                                                passive_tracker.record_success(&node);
+                                            } else {
+                                                passive_tracker.record_failure(&node);
+                                                debug!(worker = thread_id, error = %std::io::Error::last_os_error(), "UDP send failed");
+                                            }
+                                            // reschedule eviction
+                                            if let Some(idx) = m.get_idx(src) {
+                                                let _ = wheel.lock().map(|mut w| w.schedule(idx, config.idle_timeout.as_secs() as usize));
+                                            }
+                                        } else {
+                                            // create new connected upstream socket
+                                            let domain = if node.addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+                                            let sock = match Socket::new(domain, Type::DGRAM, Some(Protocol::UDP)) {
+                                                Ok(s) => s,
+                                                Err(e) => { error!(error = %e, "Failed to create upstream udp socket"); continue; }
+                                            };
+                                            sock.set_nonblocking(true)?;
+                                            let _ = sock.connect(&node.addr.into());
+                                            let up_fd = sock.into_raw_fd();
+
+                                            // register upstream fd for readability
+                                            let mut src_fd = MioSourceFd(&up_fd);
+                                            let token = Token(1 + up_fd as usize);
+                                            poll.registry().register(&mut src_fd, token, Interest::READABLE)?;
+
+                                            let idx = m.insert(src, up_fd);
+                                            // schedule eviction
+                                            let ticks = config.idle_timeout.as_secs() as usize;
+                                            let _ = wheel.lock().map(|mut w| w.schedule(idx, ticks));
+
+                                            // send data
+                                            let sret = unsafe {
+                                                libc::send(up_fd, data.as_ptr() as *const libc::c_void, data.len(), 0)
+                                            };
+                                            if sret >= 0 {
+                                                passive_tracker.record_success(&node);
+                                            } else {
+                                                passive_tracker.record_failure(&node);
+                                                debug!(worker = thread_id, error = %std::io::Error::last_os_error(), "UDP send failed");
+                                            }
+                                        }
+                                    } else {
+                                        debug!(worker = thread_id, client = %src, "No healthy UDP upstreams available");
+                                    }
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                                Err(e) => { error!(worker = thread_id, error = %e, "UDP recv error"); break; }
+                            }
+                        }
+                    } else {
+                        // upstream response on a session socket
+                        let tok = ev.token().0;
+                        if tok >= 1 {
+                            let up_fd = tok - 1; // we encoded fd into token earlier
+                            // read from up_fd
+                            let mut rbuf = vec![0u8; 65536];
+                            let rc = unsafe { libc::recv(up_fd as i32, rbuf.as_mut_ptr() as *mut libc::c_void, rbuf.len(), 0) };
+                            if rc > 0 {
+                                let rn = rc as usize;
+                                // find client addr from map
+                                if let Ok(mut m) = udp_map.lock() {
+                                    if let Some((idx, client_addr)) = m.find_by_upstream_fd(up_fd as RawFd) {
+                                        let _ = mio_udp.send_to(&rbuf[..rn], client_addr);
+                                        let _ = m.touch(client_addr);
+                                        let ticks = config.idle_timeout.as_secs() as usize;
+                                        let _ = wheel.lock().map(|mut w| w.schedule(idx, ticks));
+                                    }
+                                }
+                            } else if rc == 0 {
+                                // EOF on udp socket? remove
+                                if let Ok(mut m) = udp_map.lock() {
+                                    if let Some((i, _)) = m.find_by_upstream_fd(up_fd as RawFd) {
+                                        m.remove_by_idx(i);
+                                    }
+                                }
+                                // deregister
+                                let mut src = MioSourceFd(&(up_fd as RawFd));
+                                let _ = poll.registry().deregister(&mut src);
+                                unsafe { libc::close(up_fd as RawFd); }
+                            } else {
+                                let err = std::io::Error::last_os_error();
+                                if err.raw_os_error() == Some(libc::EAGAIN) { continue; }
+                                error!(worker = thread_id, error = %err, "Error reading upstream udp socket");
+                            }
+                        }
+                    }
+                }
+                // handle wheel expirations
+                if let Ok(mut w) = wheel.lock() {
+                    let expired = w.tick();
+                    if !expired.is_empty() {
+                        if let Ok(mut m) = udp_map.lock() {
+                            for idx in expired {
+                                if let Some(sess) = m.remove_by_idx(idx) {
+                                    // deregister and close fd
+                                    let mut src = MioSourceFd(&sess.upstream_fd);
+                                    let _ = poll.registry().deregister(&mut src);
+                                    unsafe { libc::close(sess.upstream_fd); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            info!(worker = thread_id, "UDP worker shutting down");
+            return Ok(());
+        }
+
+        // TCP path follows
+        let domain = if config.bind.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        socket.set_reuse_address(true)?;
+
+        // try to set SO_REUSEPORT (best-effort)
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = socket.as_raw_fd();
+            let val: libc::c_int = 1;
+            unsafe {
+                let _ = libc::setsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_REUSEPORT,
+                    &val as *const _ as *const libc::c_void,
+                    std::mem::size_of_val(&val) as libc::socklen_t,
+                );
+            }
+        }
+
+        socket.set_nonblocking(true)?;
+        socket.bind(&config.bind.into())?;
+        socket.listen(1024)?;
+
+        // convert to mio listener
+        let raw = socket.into_raw_fd();
+        let std_listener = unsafe { std::net::TcpListener::from_raw_fd(raw) };
+        std_listener.set_nonblocking(true)?;
+        let mut mio_listener = MioTcpListener::from_std(std_listener);
+
+        let mut poll = Poll::new()?;
+        const LISTENER: Token = Token(0);
+        const WAKER: Token = Token(usize::MAX);
+        poll.registry().register(&mut mio_listener, LISTENER, Interest::READABLE)?;
+
+        // worker-local UDP session map (evicted periodically)
+        let udp_map = Arc::new(Mutex::new(UdpSessionMap::new(Duration::from_secs(60))));
+        // simple timer wheel (ticks once per second, size 64)
+        let wheel = Arc::new(Mutex::new(crate::l4::engine::timer_wheel::TimerWheel::new(64)));
+
+        // create a waker for low-latency shutdown notifications
+        let w = Waker::new(poll.registry(), WAKER)?;
+        let waker = std::sync::Arc::new(w);
+        // spawn a small watcher thread that will wake this poll when shutdown is set
+        // and periodically evict idle UDP sessions
+        {
+            let sdn = shutdown.clone();
+            let wk = waker.clone();
+            let udp_map_clone = udp_map.clone();
+            std::thread::spawn(move || {
+                let mut last_evict = std::time::Instant::now();
+                loop {
+                    if sdn.load(Ordering::Relaxed) {
+                        let _ = wk.wake();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                    if last_evict.elapsed() >= Duration::from_secs(1) {
+                        last_evict = std::time::Instant::now();
+                        if let Ok(mut m) = udp_map_clone.lock() {
+                            let removed = m.evict_expired();
+                            if removed > 0 {
+                                let _ = wk.wake();
+                            // also tick timer wheel and remove by indices
+                            if let Ok(mut w) = wheel.lock() {
+                                let expired = w.tick();
+                                for idx in expired {
+                                    let _ = m.remove_by_idx(idx);
+                                }
+                            }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        let mut events = Events::with_capacity(1024);
+
+        // Connection slab and token mapping
+        let mut conns: Slab<Conn> = Slab::with_capacity(1024);
+
+        // Build backend nodes and start blocking health checks for this worker
+        let nodes: Vec<Arc<crate::l4::backend::BackendNode>> = config
+            .upstreams
+            .iter()
+            .map(|addr| Arc::new(crate::l4::backend::BackendNode::new(*addr)))
+            .collect();
+
+        crate::l4::health::HealthOrchestrator::spawn_blocking(
+            nodes.clone(),
+            Duration::from_secs(5),
+            config.connect_timeout,
+            shutdown.clone(),
+        );
+
+        // We'll use tokens: listener = 0, client = 1 + conn_id*2, upstream = 1 + conn_id*2 +1
+
+        // Create a worker-local pipe for splice operations
+        let pipe = match PipeFd::new() {
+            Ok(p) => p,
+            Err(e) => return Err(e),
+        };
+
+        while !shutdown.load(Ordering::Relaxed) {
+            // poll with timeout
+            poll.poll(&mut events, Some(Duration::from_millis(200)))?;
+
+            for ev in &events {
+                if ev.token() == WAKER {
+                    // wake due to shutdown — continue to allow loop condition to exit
+                    continue;
+                }
+                if ev.token() == LISTENER && ev.is_readable() {
+                    // accept all pending connections
+                    loop {
+                        match mio_listener.accept() {
+                            Ok((stream, addr)) => {
+                                // get raw fd from mio stream and take ownership
+                                let client_fd = stream.as_raw_fd();
+                                // prevent mio stream destructor from closing the fd; we'll manage it manually
+                                std::mem::forget(stream);
+
+                                // Initiate non-blocking connect to upstream (choose first upstream from config)
+                                let upstream_addr = match config.upstreams.get(0) {
+                                    Some(a) => *a,
+                                    None => { unsafe { libc::close(client_fd) }; continue; }
+                                };
+
+                                let domain = if upstream_addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+                                let usock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+                                usock.set_nonblocking(true)?;
+                                let _ = usock.connect(&upstream_addr.into());
+                                let upstream_fd = usock.into_raw_fd();
+
+                                // Register both fds with poll via SourceFd
+                                let entry = conns.vacant_entry();
+                                let key = entry.key();
+                                let client_token = Token(1 + key * 2);
+                                let upstream_token = Token(1 + key * 2 + 1);
+
+                                let mut src_c = MioSourceFd(&client_fd);
+                                let mut src_u = MioSourceFd(&upstream_fd);
+                                poll.registry().register(&mut src_c, client_token, Interest::READABLE | Interest::WRITABLE)?;
+                                poll.registry().register(&mut src_u, upstream_token, Interest::READABLE | Interest::WRITABLE)?;
+
+                                entry.insert(Conn { client_fd, upstream_fd, state: ConnState::Connecting });
+                                debug!(worker = thread_id, upstream = %addr, "Accepted connection, conn_id={}", key);
+                            }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(e) => {
+                                error!(worker = thread_id, error = %e, "Accept error");
+                                break;
+                            }
+                        }
+
+                        // (no-op) accept loop does not use remove_conn here
+                    }
+                } else {
+                    // handle connection events
+                    let tok = ev.token().0;
+                    if tok >= 1 {
+                        let idx = (tok - 1) / 2;
+                        let is_client = (tok - 1) % 2 == 0;
+                        let mut remove_conn: Option<usize> = None;
+                        if let Some(mut_conn) = conns.get_mut(idx) {
+                            // check connect completion if upstream writable and state is Connecting
+                            if !is_client && ev.is_writable() && mut_conn.state == ConnState::Connecting {
+                                // check SO_ERROR
+                                let mut err: libc::c_int = 0;
+                                let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+                                let rc = unsafe {
+                                    libc::getsockopt(mut_conn.upstream_fd, libc::SOL_SOCKET, libc::SO_ERROR, &mut err as *mut _ as *mut libc::c_void, &mut len)
+                                };
+                                if rc == 0 && err == 0 {
+                                    mut_conn.state = ConnState::Established;
+                                    debug!(worker = thread_id, conn = idx, "Upstream connected");
+                                } else {
+                                    // failed, tear down
+                                    let mut src_c_close = MioSourceFd(&mut_conn.client_fd);
+                                    let mut src_u_close = MioSourceFd(&mut_conn.upstream_fd);
+                                    let _ = poll.registry().deregister(&mut src_c_close);
+                                    let _ = poll.registry().deregister(&mut src_u_close);
+                                    unsafe { libc::close(mut_conn.client_fd); libc::close(mut_conn.upstream_fd); }
+                                    remove_conn = Some(idx);
+                                    debug!(worker = thread_id, conn = idx, "Upstream connect failed");
+                                }
+                            }
+
+                            // if established and readable, perform splice from 'from' -> 'to'
+                            if ev.is_readable() && mut_conn.state == ConnState::Established {
+                                let from = if is_client { mut_conn.client_fd } else { mut_conn.upstream_fd };
+                                let to = if is_client { mut_conn.upstream_fd } else { mut_conn.client_fd };
+
+                                loop {
+                                    let n = unsafe { libc::splice(from, std::ptr::null_mut(), pipe.write_end(), std::ptr::null_mut(), 65536, 0) };
+                                    if n > 0 {
+                                        let mut rem = n;
+                                        while rem > 0 {
+                                            let w = unsafe { libc::splice(pipe.read_end(), std::ptr::null_mut(), to, std::ptr::null_mut(), rem as usize, 0) };
+                                            if w > 0 {
+                                                rem -= w;
+                                            } else if w == 0 {
+                                                // EOF while writing -> close
+                                                let mut src_c_close = MioSourceFd(&mut_conn.client_fd);
+                                                let mut src_u_close = MioSourceFd(&mut_conn.upstream_fd);
+                                                let _ = poll.registry().deregister(&mut src_c_close);
+                                                let _ = poll.registry().deregister(&mut src_u_close);
+                                                unsafe { libc::close(mut_conn.client_fd); libc::close(mut_conn.upstream_fd); }
+                                                remove_conn = Some(idx);
+                                                debug!(worker = thread_id, conn = idx, "Connection closed by peer");
+                                                break;
+                                            } else {
+                                                let e = std::io::Error::last_os_error();
+                                                if e.raw_os_error() == Some(libc::EAGAIN) {
+                                                    break; // no more data now
+                                                } else {
+                                                    // unrecoverable error
+                                                    let mut src_c_close = MioSourceFd(&mut_conn.client_fd);
+                                                    let mut src_u_close = MioSourceFd(&mut_conn.upstream_fd);
+                                                    let _ = poll.registry().deregister(&mut src_c_close);
+                                                    let _ = poll.registry().deregister(&mut src_u_close);
+                                                    unsafe { libc::close(mut_conn.client_fd); libc::close(mut_conn.upstream_fd); }
+                                                    remove_conn = Some(idx);
+                                                    debug!(worker = thread_id, conn = idx, "splice error, closing connection");
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        // try to splice more if available
+                                        continue;
+                                    } else if n == 0 {
+                                        // EOF - close conn
+                                        let mut src_c_close = MioSourceFd(&mut_conn.client_fd);
+                                        let mut src_u_close = MioSourceFd(&mut_conn.upstream_fd);
+                                        let _ = poll.registry().deregister(&mut src_c_close);
+                                        let _ = poll.registry().deregister(&mut src_u_close);
+                                        unsafe { libc::close(mut_conn.client_fd); libc::close(mut_conn.upstream_fd); }
+                                                remove_conn = Some(idx);
+                                                debug!(worker = thread_id, conn = idx, "Connection closed by peer");
+                                                break;
+                                    } else {
+                                        let e = std::io::Error::last_os_error();
+                                        if e.raw_os_error() == Some(libc::EAGAIN) {
+                                            break; // no more data now
+                                        } else {
+                                            // unrecoverable error
+                                            let mut src_c_close = MioSourceFd(&mut_conn.client_fd);
+                                            let mut src_u_close = MioSourceFd(&mut_conn.upstream_fd);
+                                            let _ = poll.registry().deregister(&mut src_c_close);
+                                            let _ = poll.registry().deregister(&mut src_u_close);
+                                            unsafe { libc::close(mut_conn.client_fd); libc::close(mut_conn.upstream_fd); }
+                                            remove_conn = Some(idx);
+                                            debug!(worker = thread_id, conn = idx, "splice error, closing connection");
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(ridx) = remove_conn {
+                            let _ = conns.remove(ridx);
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        info!(worker = thread_id, "Worker shutting down");
+        Ok(())
+    }
+}
+
+=== FILE: ./engine/udp_sessions.rs ===
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::os::unix::io::RawFd;
+use std::time::{Duration, Instant};
+
+use slab::Slab;
+
+pub struct UdpSession {
+    pub client: SocketAddr,
+    pub upstream_fd: RawFd,
+    pub last_seen: Instant,
+}
+
+pub struct UdpSessionMap {
+    slab: Slab<UdpSession>,
+    map: HashMap<SocketAddr, usize>,
+    timeout: Duration,
+}
+
+impl UdpSessionMap {
+    pub fn new(timeout: Duration) -> Self {
+        Self { slab: Slab::with_capacity(1024), map: HashMap::with_capacity(1024), timeout }
+    }
+
+    pub fn len(&self) -> usize {
+        self.slab.len()
+    }
+
+    pub fn insert(&mut self, client: SocketAddr, upstream_fd: RawFd) -> usize {
+        if let Some(&idx) = self.map.get(&client) {
+            if let Some(sess) = self.slab.get_mut(idx) {
+                sess.upstream_fd = upstream_fd;
+                sess.last_seen = Instant::now();
+                return idx;
+            }
+        }
+
+        let entry = self.slab.vacant_entry();
+        let idx = entry.key();
+        entry.insert(UdpSession { client, upstream_fd, last_seen: Instant::now() });
+        self.map.insert(client, idx);
+        idx
+    }
+
+    pub fn touch(&mut self, client: SocketAddr) -> Option<RawFd> {
+        if let Some(&idx) = self.map.get(&client) {
+            if let Some(sess) = self.slab.get_mut(idx) {
+                sess.last_seen = Instant::now();
+                return Some(sess.upstream_fd);
+            }
+        }
+        None
+    }
+
+    pub fn remove(&mut self, client: SocketAddr) -> Option<UdpSession> {
+        if let Some(idx) = self.map.remove(&client) {
+            return Some(self.slab.remove(idx));
+        }
+        None
+    }
+
+    pub fn remove_by_idx(&mut self, idx: usize) -> Option<UdpSession> {
+        // Slab::remove returns the removed value (not Option), but catch panics via checking contains
+        if idx < self.slab.capacity() && self.slab.contains(idx) {
+            let sess = self.slab.remove(idx);
+            self.map.remove(&sess.client);
+            return Some(sess);
+        }
+        None
+    }
+
+    /// Return the slab index for a client address if present.
+    pub fn get_idx(&self, client: SocketAddr) -> Option<usize> {
+        self.map.get(&client).cloned()
+    }
+
+    /// Find a session by its upstream_fd and return (idx, client)
+    pub fn find_by_upstream_fd(&self, fd: RawFd) -> Option<(usize, SocketAddr)> {
+        for (idx, sess) in self.slab.iter() {
+            if sess.upstream_fd == fd {
+                return Some((idx, sess.client));
+            }
+        }
+        None
+    }
+
+    /// Evict sessions that are idle longer than timeout. Returns number removed.
+    pub fn evict_expired(&mut self) -> usize {
+        let now = Instant::now();
+        let mut removed = Vec::new();
+        for (idx, sess) in self.slab.iter() {
+            if now.duration_since(sess.last_seen) > self.timeout {
+                removed.push((idx, sess.client));
+            }
+        }
+        for (idx, client) in removed.iter() {
+            self.slab.remove(*idx);
+            self.map.remove(client);
+        }
+        removed.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn insert_and_touch() {
+        let mut m = UdpSessionMap::new(Duration::from_secs(1));
+        let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        let _ = m.insert(addr, 5);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m.touch(addr), Some(5));
+    }
+
+    #[test]
+    fn evict_with_zero_timeout() {
+        let mut m = UdpSessionMap::new(Duration::from_secs(0));
+        let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        let _ = m.insert(addr, 5);
+        assert_eq!(m.len(), 1);
+        let removed = m.evict_expired();
+        assert_eq!(removed, 1);
+        assert_eq!(m.len(), 0);
+    }
+}
+
+=== FILE: ./engine/timer_wheel.rs ===
+use std::collections::HashMap;
+
+pub struct TimerWheel {
+    slots: Vec<Vec<usize>>,
+    idx_map: HashMap<usize, usize>,
+    cur: usize,
+    size: usize,
+}
+
+impl TimerWheel {
+    pub fn new(size: usize) -> Self {
+        Self { slots: vec![Vec::new(); size], idx_map: HashMap::new(), cur: 0, size }
+    }
+
+    /// Schedule a key to expire `ticks` from now. Returns true on success.
+    pub fn schedule(&mut self, key: usize, ticks: usize) -> bool {
+        if ticks == 0 { return false; }
+        let slot = (self.cur + (ticks % self.size)) % self.size;
+        self.slots[slot].push(key);
+        self.idx_map.insert(key, slot);
+        true
+    }
+
+    /// Remove a key from wheel if present.
+    pub fn remove(&mut self, key: usize) {
+        if let Some(slot) = self.idx_map.remove(&key) {
+            if let Some(pos) = self.slots[slot].iter().position(|&k| k == key) {
+                self.slots[slot].swap_remove(pos);
+            }
+        }
+    }
+
+    /// Advance wheel by one tick, return expired keys.
+    pub fn tick(&mut self) -> Vec<usize> {
+        let next = (self.cur + 1) % self.size;
+        let mut expired = Vec::new();
+        std::mem::swap(&mut expired, &mut self.slots[next]);
+        // advance current pointer after extracting expired
+        self.cur = next;
+        for k in &expired {
+            self.idx_map.remove(k);
+        }
+        expired
+    }
+}
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn schedule_and_tick_wraps() {
+            let mut w = TimerWheel::new(4);
+            assert!(w.schedule(1, 1));
+            assert!(w.schedule(2, 3));
+
+            // advance one tick -> should expire key 1
+            let e1 = w.tick();
+            assert_eq!(e1.len(), 1);
+            assert!(e1.contains(&1));
+
+            // advance 2 more ticks to wrap and expire key 2
+            w.tick();
+            let e2 = w.tick();
+            assert_eq!(e2.len(), 1);
+            assert!(e2.contains(&2));
+        }
+
+        #[test]
+        fn remove_key() {
+            let mut w = TimerWheel::new(4);
+            assert!(w.schedule(5, 2));
+            w.remove(5);
+            // tick several times and ensure 5 never appears
+            for _ in 0..4 {
+                let e = w.tick();
+                assert!(!e.contains(&5));
+            }
+        }
+    }
+
+=== FILE: ./engine/pipe.rs ===
+use std::io;
+
+pub struct PipeFd {
+    fds: [libc::c_int; 2],
+}
+
+impl PipeFd {
+    pub fn new() -> io::Result<Self> {
+        let mut fds = [0; 2];
+        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { fds })
+    }
+
+    pub fn read_end(&self) -> libc::c_int {
+        self.fds[0]
+    }
+
+    pub fn write_end(&self) -> libc::c_int {
+        self.fds[1]
+    }
+}
+
+impl Drop for PipeFd {
+    fn drop(&mut self) {
+        unsafe {
+            libc::close(self.fds[0]);
+            libc::close(self.fds[1]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pipe_read_write() {
+        let p = PipeFd::new().expect("pipe");
+        let wfd = p.write_end();
+        let rfd = p.read_end();
+        let msg = b"hello";
+        let nw = unsafe { libc::write(wfd, msg.as_ptr() as *const libc::c_void, msg.len()) };
+        assert_eq!(nw as usize, msg.len());
+        let mut buf = [0u8; 16];
+        let nr = unsafe { libc::read(rfd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        assert_eq!(nr as usize, msg.len());
+        assert_eq!(&buf[..nr as usize], msg);
+    }
+}
+
+=== FILE: ./health/mod.rs ===
+pub mod active;
+pub mod passive;
+
+use std::sync::Arc;
+use std::time::Duration;
+use std::sync::atomic::AtomicBool;
+
+use crate::l4::backend::BackendNode;
+pub use active::ActiveHealthChecker;
+pub use passive::PassiveHealthTracker;
+
+pub struct HealthOrchestrator;
+
+impl HealthOrchestrator {
+    /// Spawn background blocking health checks using a shutdown flag.
+    pub fn spawn_blocking(
+        nodes: Vec<Arc<BackendNode>>,
+        interval: Duration,
+        timeout: Duration,
+        shutdown: Arc<AtomicBool>,
+    ) {
+        ActiveHealthChecker::start_loop_blocking(nodes, interval, timeout, shutdown);
+    }
+}
+
+=== FILE: ./health/active.rs ===
+use socket2::{Domain, Protocol, Socket, Type};
+use std::os::fd::IntoRawFd;
+use std::sync::Arc;
+use std::sync::atomic::{Ordering, AtomicBool};
+use std::time::Duration;
+use tracing::{debug, warn};
+
+use crate::l4::backend::BackendNode;
+
+pub struct ActiveHealthChecker;
+
+impl ActiveHealthChecker {
+    // Async tokio-based active checks removed — use blocking `start_loop_blocking`.
+
+    /// Blocking variant used by mio worker: runs in a dedicated std thread.
+    pub fn start_loop_blocking(
+        nodes: Vec<Arc<BackendNode>>,
+        interval: Duration,
+        timeout: Duration,
+        shutdown: Arc<AtomicBool>,
+    ) {
+        std::thread::spawn(move || {
+            while !shutdown.load(Ordering::Relaxed) {
+                let start = std::time::Instant::now();
+                for node in &nodes {
+                    let addr = node.addr;
+                    let is_alive = Self::check_with_zero_linger_sync(addr, timeout);
+
+                    let prev = node.is_healthy.swap(is_alive, Ordering::Relaxed);
+                    if prev != is_alive {
+                        if is_alive {
+                            node.mark_success(1);
+                            debug!(upstream = %addr, "Active check PASSED (node recovered)");
+                        } else {
+                            node.mark_failure(1);
+                            warn!(upstream = %addr, "Active check FAILED (node marked down)");
+                        }
+                    }
+                }
+                // sleep until next interval, but break early if shutdown
+                let elapsed = start.elapsed();
+                if elapsed < interval {
+                    let sleep_dur = interval - elapsed;
+                    let mut slept = Duration::from_millis(0);
+                    while slept < sleep_dur {
+                        if shutdown.load(Ordering::Relaxed) { break; }
+                        let to_sleep = std::cmp::min(Duration::from_millis(200), sleep_dur - slept);
+                        std::thread::sleep(to_sleep);
+                        slept += to_sleep;
+                    }
+                }
+            }
+        });
+    }
+
+    fn check_with_zero_linger_sync(addr: std::net::SocketAddr, timeout: Duration) -> bool {
+        let domain = if addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+        let socket = match Socket::new(domain, Type::STREAM, Some(Protocol::TCP)) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        let _ = socket.set_linger(Some(Duration::ZERO));
+        let _ = socket.set_nonblocking(true);
+
+        match socket.connect(&addr.into()) {
+            Ok(_) => true,
+            Err(e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {
+                let mut pfd = libc::pollfd {
+                    fd: socket.into_raw_fd(),
+                    events: libc::POLLOUT,
+                    revents: 0,
+                };
+                let ret = unsafe { libc::poll(&mut pfd, 1, timeout.as_millis() as i32) };
+                ret > 0
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+=== FILE: ./health/passive.rs ===
+use crate::l4::backend::BackendNode;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct PassiveHealthTracker {
+    max_failures: usize,
+}
+
+impl PassiveHealthTracker {
+    pub fn new(max_failures: usize) -> Self {
+        Self { max_failures }
+    }
+
+    #[inline]
+    pub fn record_success(&self, node: &Arc<BackendNode>) {
+        node.mark_success(1);
+    }
+
+    #[inline]
+    pub fn record_failure(&self, node: &Arc<BackendNode>) {
+        node.mark_failure(self.max_failures);
+    }
+}
+

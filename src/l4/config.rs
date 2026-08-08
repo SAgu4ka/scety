@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
 use toml::Value;
 use tracing::{error, info};
 
@@ -51,7 +51,10 @@ pub fn validate_l4_configs(configs: &[Value]) -> bool {
         let table = match cnfg.as_table() {
             Some(t) => t,
             None => {
-                error!(config_idx = idx, "Configuration root must be a valid TOML table");
+                error!(
+                    config_idx = idx,
+                    "Configuration root must be a valid TOML table"
+                );
                 has_errors = true;
                 continue;
             }
@@ -143,7 +146,10 @@ pub fn validate_l4_configs(configs: &[Value]) -> bool {
     }
 
     if !has_errors {
-        info!(validated_services = l4_count, "L4 configuration check passed successfully");
+        info!(
+            validated_services = l4_count,
+            "L4 configuration check passed successfully"
+        );
     } else {
         error!("L4 configuration check failed due to validation errors");
     }
@@ -152,7 +158,6 @@ pub fn validate_l4_configs(configs: &[Value]) -> bool {
 }
 
 pub async fn parse_l4_confs(configs: Vec<Value>) -> Vec<L4ServiceConfig> {
-
     if !validate_l4_configs(&configs) {
         error!("Aborting L4 configuration parsing due to validation errors");
         return Vec::new();
@@ -177,15 +182,32 @@ pub async fn parse_l4_confs(configs: Vec<Value>) -> Vec<L4ServiceConfig> {
             continue;
         }
 
-        let name = get_str_case_insensitive(table, "name").unwrap().trim().to_string();
-        let bind_addr: SocketAddr = get_str_case_insensitive(table, "bind").unwrap().parse().unwrap();
+        let name = match get_str_case_insensitive(table, "name") {
+            Some(n) => n.trim().to_string(),
+            None => continue,
+        };
 
-        let upstreams_val = get_field_case_insensitive(table, "upstreams").unwrap().as_array().unwrap();
+        let bind_addr: SocketAddr =
+            match get_str_case_insensitive(table, "bind").and_then(|b| b.parse().ok()) {
+                Some(addr) => addr,
+                None => continue,
+            };
+
+        let upstreams_val =
+            match get_field_case_insensitive(table, "upstreams").and_then(|v| v.as_array()) {
+                Some(arr) => arr,
+                None => continue,
+            };
+
         let parsed_upstreams: Vec<SocketAddr> = upstreams_val
             .iter()
             .filter_map(|item| item.as_str())
             .filter_map(|s| s.parse().ok())
             .collect();
+
+        if parsed_upstreams.is_empty() {
+            continue;
+        }
 
         let protocol = get_str_case_insensitive(table, "protocol")
             .map(|s| match s.to_lowercase().as_str() {
@@ -206,11 +228,13 @@ pub async fn parse_l4_confs(configs: Vec<Value>) -> Vec<L4ServiceConfig> {
             })
             .unwrap_or(LbStrategy::LeastConnections);
 
-        let send_proxy_protocol = get_str_case_insensitive(table, "send_proxy_protocol")
-            .and_then(|s| match s.to_lowercase().as_str() {
-                "v1" => Some(ProxyProtocolVersion::V1),
-                "v2" => Some(ProxyProtocolVersion::V2),
-                _ => None,
+        let send_proxy_protocol =
+            get_str_case_insensitive(table, "send_proxy_protocol").and_then(|s| {
+                match s.to_lowercase().as_str() {
+                    "v1" => Some(ProxyProtocolVersion::V1),
+                    "v2" => Some(ProxyProtocolVersion::V2),
+                    _ => None,
+                }
             });
 
         let connect_timeout_secs = get_int_case_insensitive(table, "connect_timeout").unwrap_or(3);
@@ -234,7 +258,10 @@ pub async fn parse_l4_confs(configs: Vec<Value>) -> Vec<L4ServiceConfig> {
     ready_cfgs
 }
 
-fn get_field_case_insensitive<'a>(table: &'a toml::map::Map<String, Value>, key: &str) -> Option<&'a Value> {
+fn get_field_case_insensitive<'a>(
+    table: &'a toml::map::Map<String, Value>,
+    key: &str,
+) -> Option<&'a Value> {
     table.iter().find_map(|(k, v)| {
         if k.eq_ignore_ascii_case(key) {
             Some(v)
@@ -244,7 +271,10 @@ fn get_field_case_insensitive<'a>(table: &'a toml::map::Map<String, Value>, key:
     })
 }
 
-fn get_str_case_insensitive<'a>(table: &'a toml::map::Map<String, Value>, key: &str) -> Option<&'a str> {
+fn get_str_case_insensitive<'a>(
+    table: &'a toml::map::Map<String, Value>,
+    key: &str,
+) -> Option<&'a str> {
     get_field_case_insensitive(table, key).and_then(|v| v.as_str())
 }
 

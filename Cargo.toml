@@ -7,6 +7,10 @@ repository = "https://github.com/SAgu4ka/scety"
 
 [dependencies]
 tokio = { version = "1", features = ["full", "signal"] }
+tokio-util = "0.7.18"
+tokio-rustls = "0.26"
+tokio-rustls-acme = "0.9"
+tokio-stream = { version = "0.1", features = ["net"] }
 serde = { version = "1.0", features = ["derive"] }
 toml = "1.1"
 chrono = "0.4"
@@ -17,19 +21,24 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["chrono", "env-filter"] }
 clap = { version = "4", features = ["derive"] }
 nix = { version = "0.31", features = ["user", "fs"] }
-tokio-util = "0.7.18"
 humantime = "2.3.0"
 smallvec = "1.15.2"
-tokio-rustls = "0.26"
-rustls-pki-types = { version = "1", features = ["std"] }
-tokio-rustls-acme = "0.9"
-tokio-stream = { version = "0.1", features = ["net"] }
 futures = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 lru = "0.18"
 x509-parser = "0.18"
 webpki-roots = "1"
 const_format = "0.2.36"
+socket2 = "0.4"
+libc = "0.2"
+fxhash = "0.2"
+mio = { version = "0.8", features = ["net", "os-ext"] }
+num_cpus = "1.17"
+slab = "0.4"
+
+[features]
+default = []
 
 [build-dependencies]
 toml = "0.8"
