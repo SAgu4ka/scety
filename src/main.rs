@@ -12,6 +12,9 @@ mod core;
 mod http;
 mod l4;
 mod network;
+mod l7;
+mod lstatic;
+mod _core;
 
 async fn run_command<F, Fut>(f: F)
 where

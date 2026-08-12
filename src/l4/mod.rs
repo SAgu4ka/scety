@@ -7,7 +7,6 @@ pub mod health;
 pub mod lb;
 
 pub use config::L4ServiceConfig;
-// `start_l4_listen` is exposed via `L4ServiceManager::start`.
 
 pub struct L4ServiceManager;
 
@@ -79,7 +78,6 @@ mod tests {
             .map(|a| Arc::new(BackendNode::new(*a)))
             .collect();
         let lb = RoundRobinLB::new(nodes);
-        // select three times, should cycle
         let c1 = lb
             .select(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1))
             .unwrap();
@@ -103,7 +101,6 @@ mod tests {
             .map(|a| Arc::new(BackendNode::new(*a)))
             .collect::<Vec<_>>();
 
-        // bump active_conns on first node
         nodes[0]
             .active_conns
             .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
@@ -119,7 +116,6 @@ mod tests {
         let client = SocketAddr::from_str("127.0.0.1:12345").unwrap();
         let dest = SocketAddr::from_str("127.0.0.1:80").unwrap();
         let h = ProxyProtocol::build_v2_header(client, dest);
-        // signature(12) + v/c(1) + fam/proto(1) + len(2) + payload(12) = 28
         assert_eq!(h.len(), 28);
         assert!(h.starts_with(b"\r\n\r\n\x00\r\nQUIT\n"));
     }

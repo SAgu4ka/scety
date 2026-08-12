@@ -12,15 +12,13 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 pub fn start_l4_listen(configs: Vec<L4ServiceConfig>) -> Vec<Arc<AtomicBool>> {
-    // By default, start mio thread-per-core workers for given configs.
     start_mio_listen(configs)
 }
 
-/// Start Thread-per-Core mio-based workers for given configs.
 pub fn start_mio_listen(configs: Vec<L4ServiceConfig>) -> Vec<Arc<AtomicBool>> {
     let mut handles = Vec::new();
     for config in configs {
-        info!(bind = %config.bind, service = %config.name, "Initializing mio L4 engine service");
+        info!(bind = %config.bind, service = %config.name, "Initializing L4 engine service");
         let shutdown = Arc::new(AtomicBool::new(false));
         MioL4Worker::spawn_thread_per_core(config, shutdown.clone());
         handles.push(shutdown);

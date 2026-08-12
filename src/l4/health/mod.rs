@@ -12,7 +12,6 @@ pub use passive::PassiveHealthTracker;
 pub struct HealthOrchestrator;
 
 impl HealthOrchestrator {
-    /// Spawn background blocking health checks using a shutdown flag.
     pub fn spawn_blocking(
         nodes: Vec<Arc<BackendNode>>,
         interval: Duration,

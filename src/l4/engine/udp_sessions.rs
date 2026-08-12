@@ -68,7 +68,6 @@ impl UdpSessionMap {
     }
 
     pub fn remove_by_idx(&mut self, idx: usize) -> Option<UdpSession> {
-        // Slab::remove returns the removed value (not Option), but catch panics via checking contains
         if idx < self.slab.capacity() && self.slab.contains(idx) {
             let sess = self.slab.remove(idx);
             self.map.remove(&sess.client);
@@ -77,12 +76,10 @@ impl UdpSessionMap {
         None
     }
 
-    /// Return the slab index for a client address if present.
     pub fn get_idx(&self, client: SocketAddr) -> Option<usize> {
         self.map.get(&client).cloned()
     }
 
-    /// Find a session by its upstream_fd and return (idx, client)
     pub fn find_by_upstream_fd(&self, fd: RawFd) -> Option<(usize, SocketAddr)> {
         for (idx, sess) in self.slab.iter() {
             if sess.upstream_fd == fd {
@@ -92,7 +89,6 @@ impl UdpSessionMap {
         None
     }
 
-    /// Evict sessions that are idle longer than timeout. Returns number removed.
     pub fn evict_expired(&mut self) -> usize {
         let now = Instant::now();
         let mut removed = Vec::new();

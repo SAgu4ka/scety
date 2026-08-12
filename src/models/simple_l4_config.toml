@@ -1,0 +1,40 @@
+# WARNING: This file is a sample only. SCETY will not validate it.
+
+
+# Example L4 service configuration.
+# This matches the validation and parsing rules in src/l4/config.rs.
+# The root must identify the service type as L4.
+proxy_type = "L4"
+
+# Required service identifier. Must be unique among L4 services.
+name = "example_l4_service"
+
+# The address the service binds to. Format: IP:PORT.
+bind = "0.0.0.0:8080"
+
+# Supported values: "tcp" or "udp".
+protocol = "tcp"
+
+# Optional socket tuning flags. Defaults are true when omitted.
+reuse_port = true
+tcp_nodelay = true
+zero_copy = true
+
+# Upstream targets. Each item must be a valid IP:PORT string.
+# At least one valid upstream is required.
+upstreams = [
+    "127.0.0.1:3000",
+    "127.0.0.1:3001",
+]
+
+# Load-balancing strategy.
+# Supported values: "round_robin", "least_connections", or "ip_hash".
+lb_strategy = "round_robin"
+
+# Optional PROXY protocol header for upstream connections.
+# Supported values: "v1" or "v2". Leave this unset to disable it.
+send_proxy_protocol = "v1"
+
+# Timeouts are interpreted as seconds.
+connect_timeout = 3
+idle_timeout = 300

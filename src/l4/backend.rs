@@ -27,10 +27,7 @@ impl BackendNode {
         }
     }
 
-    /// Called when an operation to this backend succeeded.
-    /// If `rise_threshold` consecutive successes observed, node is marked healthy.
     pub fn mark_success(&self, rise_threshold: usize) {
-        // clear failures, increment successes with release semantics
         self.consecutive_failures.store(0, Ordering::Release);
         let succ = self.consecutive_successes.fetch_add(1, Ordering::AcqRel) + 1;
         if succ >= rise_threshold {
@@ -40,10 +37,7 @@ impl BackendNode {
         }
     }
 
-    /// Called when an operation to this backend failed.
-    /// If `fall_threshold` consecutive failures observed, node is marked unhealthy.
     pub fn mark_failure(&self, fall_threshold: usize) {
-        // clear successes, increment failures with acquire/release semantics
         self.consecutive_successes.store(0, Ordering::Release);
         let fails = self.consecutive_failures.fetch_add(1, Ordering::AcqRel) + 1;
         if fails >= fall_threshold {

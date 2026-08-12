@@ -10,9 +10,6 @@ use crate::l4::backend::BackendNode;
 pub struct ActiveHealthChecker;
 
 impl ActiveHealthChecker {
-    // Async tokio-based active checks removed — use blocking `start_loop_blocking`.
-
-    /// Blocking variant used by mio worker: runs in a dedicated std thread.
     pub fn start_loop_blocking(
         nodes: Vec<Arc<BackendNode>>,
         interval: Duration,
@@ -37,7 +34,6 @@ impl ActiveHealthChecker {
                         }
                     }
                 }
-                // sleep until next interval, but break early if shutdown
                 let elapsed = start.elapsed();
                 if elapsed < interval {
                     let sleep_dur = interval - elapsed;

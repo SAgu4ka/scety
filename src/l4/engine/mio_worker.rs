@@ -35,13 +35,11 @@ enum ConnState {
 pub struct MioL4Worker;
 
 impl MioL4Worker {
-    /// Spawn one thread-per-core for each config (each thread binds with SO_REUSEPORT).
     pub fn spawn_thread_per_core(config: L4ServiceConfig, shutdown: Arc<AtomicBool>) {
         thread::spawn(move || {
             let cores = num_cpus::get();
             info!(service = %config.name, cores = cores, "Starting Thread-per-Core worker");
 
-            // Each OS thread will create its own listener bound to the same address with SO_REUSEPORT
             let mut handles = Vec::with_capacity(cores);
 
             for i in 0..cores {
@@ -66,7 +64,6 @@ impl MioL4Worker {
         config: L4ServiceConfig,
         shutdown: Arc<AtomicBool>,
     ) -> std::io::Result<()> {
-        // If this service is UDP, run a lightweight UDP forwarder loop
         if config.protocol == crate::l4::config::L4Protocol::Udp {
             let domain = if config.bind.is_ipv4() {
                 Domain::IPV4
@@ -106,7 +103,6 @@ impl MioL4Worker {
             poll.registry()
                 .register(&mut mio_udp, UDP_SOCKET, Interest::READABLE)?;
 
-            // session map and timer wheel
             let udp_map = Arc::new(std::sync::Mutex::new(UdpSessionMap::new(
                 config.idle_timeout,
             )));
@@ -114,7 +110,6 @@ impl MioL4Worker {
                 crate::l4::engine::timer_wheel::TimerWheel::new(64),
             ));
 
-            // build backends and lb
             let nodes: Vec<Arc<crate::l4::backend::BackendNode>> = config
                 .upstreams
                 .iter()
@@ -131,7 +126,6 @@ impl MioL4Worker {
             let lb = create_load_balancer(config.lb_strategy.clone(), nodes);
             let passive_tracker = PassiveHealthTracker::new(3);
 
-            // waker + watcher for eviction
             let w = Waker::new(poll.registry(), WAKER)?;
             let waker = Arc::new(w);
             {
@@ -181,12 +175,9 @@ impl MioL4Worker {
                             match mio_udp.recv_from(&mut buf) {
                                 Ok((n, src)) => {
                                     let data = &buf[..n];
-                                    // select upstream
                                     if let Some(node) = lb.select(src) {
-                                        // create or reuse session
                                         let mut m = udp_map.lock().unwrap();
                                         if let Some(up_fd) = m.touch(src) {
-                                            // send via upstream fd
                                             let sret = unsafe {
                                                 libc::send(
                                                     up_fd,
@@ -201,7 +192,6 @@ impl MioL4Worker {
                                                 passive_tracker.record_failure(&node);
                                                 debug!(worker = thread_id, error = %std::io::Error::last_os_error(), "UDP send failed");
                                             }
-                                            // reschedule eviction
                                             if let Some(idx) = m.get_idx(src) {
                                                 let _ = wheel.lock().map(|mut w| {
                                                     w.schedule(
@@ -211,7 +201,6 @@ impl MioL4Worker {
                                                 });
                                             }
                                         } else {
-                                            // create new connected upstream socket
                                             let domain = if node.addr.is_ipv4() {
                                                 Domain::IPV4
                                             } else {
@@ -232,7 +221,6 @@ impl MioL4Worker {
                                             let _ = sock.connect(&node.addr.into());
                                             let up_fd = sock.into_raw_fd();
 
-                                            // register upstream fd for readability
                                             let mut src_fd = MioSourceFd(&up_fd);
                                             let token = Token(1 + up_fd as usize);
                                             poll.registry().register(
@@ -242,12 +230,10 @@ impl MioL4Worker {
                                             )?;
 
                                             let idx = m.insert(src, up_fd);
-                                            // schedule eviction
                                             let ticks = config.idle_timeout.as_secs() as usize;
                                             let _ =
                                                 wheel.lock().map(|mut w| w.schedule(idx, ticks));
 
-                                            // send data
                                             let sret = unsafe {
                                                 libc::send(
                                                     up_fd,
@@ -275,11 +261,9 @@ impl MioL4Worker {
                             }
                         }
                     } else {
-                        // upstream response on a session socket
                         let tok = ev.token().0;
                         if tok >= 1 {
-                            let up_fd = tok - 1; // we encoded fd into token earlier
-                            // read from up_fd
+                            let up_fd = tok - 1;
                             let mut rbuf = vec![0u8; 65536];
                             let rc = unsafe {
                                 libc::recv(
@@ -291,7 +275,6 @@ impl MioL4Worker {
                             };
                             if rc > 0 {
                                 let rn = rc as usize;
-                                // find client addr from map
                                 if let Ok(mut m) = udp_map.lock()
                                     && let Some((idx, client_addr)) =
                                         m.find_by_upstream_fd(up_fd as RawFd)
@@ -307,7 +290,6 @@ impl MioL4Worker {
                                 {
                                     m.remove_by_idx(i);
                                 }
-                                // deregister
                                 let mut src = MioSourceFd(&(up_fd as RawFd));
                                 let _ = poll.registry().deregister(&mut src);
                                 unsafe {
@@ -323,7 +305,6 @@ impl MioL4Worker {
                         }
                     }
                 }
-                // handle wheel expirations
                 if let Ok(mut w) = wheel.lock() {
                     let expired = w.tick();
                     if !expired.is_empty()
@@ -331,7 +312,6 @@ impl MioL4Worker {
                     {
                         for idx in expired {
                             if let Some(sess) = m.remove_by_idx(idx) {
-                                // deregister and close fd
                                 let mut src = MioSourceFd(&sess.upstream_fd);
                                 let _ = poll.registry().deregister(&mut src);
                                 unsafe {
@@ -347,7 +327,6 @@ impl MioL4Worker {
             return Ok(());
         }
 
-        // TCP path follows
         let domain = if config.bind.is_ipv4() {
             Domain::IPV4
         } else {
@@ -356,7 +335,6 @@ impl MioL4Worker {
         let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
         socket.set_reuse_address(true)?;
 
-        // try to set SO_REUSEPORT (best-effort)
         #[cfg(unix)]
         {
             use std::os::unix::io::AsRawFd;
@@ -377,7 +355,6 @@ impl MioL4Worker {
         socket.bind(&config.bind.into())?;
         socket.listen(1024)?;
 
-        // convert to mio listener
         let raw = socket.into_raw_fd();
         let std_listener = unsafe { std::net::TcpListener::from_raw_fd(raw) };
         std_listener.set_nonblocking(true)?;
@@ -389,18 +366,13 @@ impl MioL4Worker {
         poll.registry()
             .register(&mut mio_listener, LISTENER, Interest::READABLE)?;
 
-        // worker-local UDP session map (evicted periodically)
         let udp_map = Arc::new(Mutex::new(UdpSessionMap::new(Duration::from_secs(60))));
-        // simple timer wheel (ticks once per second, size 64)
         let wheel = Arc::new(Mutex::new(crate::l4::engine::timer_wheel::TimerWheel::new(
             64,
         )));
 
-        // create a waker for low-latency shutdown notifications
         let w = Waker::new(poll.registry(), WAKER)?;
         let waker = std::sync::Arc::new(w);
-        // spawn a small watcher thread that will wake this poll when shutdown is set
-        // and periodically evict idle UDP sessions
         {
             let sdn = shutdown.clone();
             let wk = waker.clone();
@@ -419,7 +391,6 @@ impl MioL4Worker {
                             let removed = m.evict_expired();
                             if removed > 0 {
                                 let _ = wk.wake();
-                                // also tick timer wheel and remove by indices
                                 if let Ok(mut w) = wheel.lock() {
                                     let expired = w.tick();
                                     for idx in expired {
@@ -435,10 +406,8 @@ impl MioL4Worker {
 
         let mut events = Events::with_capacity(1024);
 
-        // Connection slab and token mapping
         let mut conns: Slab<Conn> = Slab::with_capacity(1024);
 
-        // Build backend nodes and start blocking health checks for this worker
         let nodes: Vec<Arc<crate::l4::backend::BackendNode>> = config
             .upstreams
             .iter()
@@ -452,31 +421,22 @@ impl MioL4Worker {
             shutdown.clone(),
         );
 
-        // We'll use tokens: listener = 0, client = 1 + conn_id*2, upstream = 1 + conn_id*2 +1
-
-        // Create a worker-local pipe for splice operations
         let pipe = PipeFd::new()?;
 
         while !shutdown.load(Ordering::Relaxed) {
-            // poll with timeout
             poll.poll(&mut events, Some(Duration::from_millis(200)))?;
 
             for ev in &events {
                 if ev.token() == WAKER {
-                    // wake due to shutdown — continue to allow loop condition to exit
                     continue;
                 }
                 if ev.token() == LISTENER && ev.is_readable() {
-                    // accept all pending connections
                     loop {
                         match mio_listener.accept() {
                             Ok((stream, addr)) => {
-                                // get raw fd from mio stream and take ownership
                                 let client_fd = stream.as_raw_fd();
-                                // prevent mio stream destructor from closing the fd; we'll manage it manually
                                 std::mem::forget(stream);
 
-                                // Initiate non-blocking connect to upstream (choose first upstream from config)
                                 let upstream_addr = match config.upstreams.first() {
                                     Some(a) => *a,
                                     None => {
@@ -495,7 +455,6 @@ impl MioL4Worker {
                                 let _ = usock.connect(&upstream_addr.into());
                                 let upstream_fd = usock.into_raw_fd();
 
-                                // Register both fds with poll via SourceFd
                                 let entry = conns.vacant_entry();
                                 let key = entry.key();
                                 let client_token = Token(1 + key * 2);
@@ -527,23 +486,18 @@ impl MioL4Worker {
                                 break;
                             }
                         }
-
-                        // (no-op) accept loop does not use remove_conn here
                     }
                 } else {
-                    // handle connection events
                     let tok = ev.token().0;
                     if tok >= 1 {
                         let idx = (tok - 1) / 2;
                         let is_client = (tok - 1) % 2 == 0;
                         let mut remove_conn: Option<usize> = None;
                         if let Some(mut_conn) = conns.get_mut(idx) {
-                            // check connect completion if upstream writable and state is Connecting
                             if !is_client
                                 && ev.is_writable()
                                 && mut_conn.state == ConnState::Connecting
                             {
-                                // check SO_ERROR
                                 let mut err: libc::c_int = 0;
                                 let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
                                 let rc = unsafe {
@@ -559,7 +513,6 @@ impl MioL4Worker {
                                     mut_conn.state = ConnState::Established;
                                     debug!(worker = thread_id, conn = idx, "Upstream connected");
                                 } else {
-                                    // failed, tear down
                                     let mut src_c_close = MioSourceFd(&mut_conn.client_fd);
                                     let mut src_u_close = MioSourceFd(&mut_conn.upstream_fd);
                                     let _ = poll.registry().deregister(&mut src_c_close);
@@ -577,7 +530,6 @@ impl MioL4Worker {
                                 }
                             }
 
-                            // if established and readable, perform splice from 'from' -> 'to'
                             if ev.is_readable() && mut_conn.state == ConnState::Established {
                                 let from = if is_client {
                                     mut_conn.client_fd
@@ -617,7 +569,6 @@ impl MioL4Worker {
                                             if w > 0 {
                                                 rem -= w;
                                             } else if w == 0 {
-                                                // EOF while writing -> close
                                                 let mut src_c_close =
                                                     MioSourceFd(&mut_conn.client_fd);
                                                 let mut src_u_close =
@@ -640,9 +591,8 @@ impl MioL4Worker {
                                             } else {
                                                 let e = std::io::Error::last_os_error();
                                                 if e.raw_os_error() == Some(libc::EAGAIN) {
-                                                    break; // no more data now
+                                                    break;
                                                 } else {
-                                                    // unrecoverable error
                                                     let mut src_c_close =
                                                         MioSourceFd(&mut_conn.client_fd);
                                                     let mut src_u_close =
@@ -667,10 +617,8 @@ impl MioL4Worker {
                                                 }
                                             }
                                         }
-                                        // try to splice more if available
                                         continue;
                                     } else if n == 0 {
-                                        // EOF - close conn
                                         let mut src_c_close = MioSourceFd(&mut_conn.client_fd);
                                         let mut src_u_close = MioSourceFd(&mut_conn.upstream_fd);
                                         let _ = poll.registry().deregister(&mut src_c_close);
@@ -689,9 +637,8 @@ impl MioL4Worker {
                                     } else {
                                         let e = std::io::Error::last_os_error();
                                         if e.raw_os_error() == Some(libc::EAGAIN) {
-                                            break; // no more data now
+                                            break;
                                         } else {
-                                            // unrecoverable error
                                             let mut src_c_close = MioSourceFd(&mut_conn.client_fd);
                                             let mut src_u_close =
                                                 MioSourceFd(&mut_conn.upstream_fd);
