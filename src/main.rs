@@ -6,15 +6,15 @@ use clap::Parser;
 use cli::args::{Cli, Commands};
 use tracing::error;
 
+mod _core;
 mod cli;
 mod config;
 mod core;
 mod http;
 mod l4;
-mod network;
 mod l7;
 mod lstatic;
-mod _core;
+mod network;
 
 async fn run_command<F, Fut>(f: F)
 where
