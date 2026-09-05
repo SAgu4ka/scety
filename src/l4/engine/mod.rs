@@ -16,12 +16,21 @@ pub fn start_l4_listen(configs: Vec<L4ServiceConfig>) -> Vec<Arc<AtomicBool>> {
 }
 
 pub fn start_mio_listen(configs: Vec<L4ServiceConfig>) -> Vec<Arc<AtomicBool>> {
+    start_mio_listen_with_handles(configs)
+        .into_iter()
+        .map(|(shutdown, _)| shutdown)
+        .collect()
+}
+
+pub fn start_mio_listen_with_handles(
+    configs: Vec<L4ServiceConfig>,
+) -> Vec<(Arc<AtomicBool>, std::thread::JoinHandle<()>)> {
     let mut handles = Vec::new();
     for config in configs {
         info!(bind = %config.bind, service = %config.name, "Initializing L4 engine service");
         let shutdown = Arc::new(AtomicBool::new(false));
-        MioL4Worker::spawn_thread_per_core(config, shutdown.clone());
-        handles.push(shutdown);
+        let worker = MioL4Worker::spawn_thread_per_core(config, shutdown.clone());
+        handles.push((shutdown, worker));
     }
     handles
 }

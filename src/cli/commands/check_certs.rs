@@ -1,9 +1,15 @@
+#[cfg(feature = "l7")]
 use crate::config::get_scety_config::get_scety_config;
+#[cfg(feature = "l7")]
 use crate::config::get_services_config::get_all_configs;
+#[cfg(feature = "l7")]
 use crate::config::settings::SERVICES_CONFIGS_PATH;
-use crate::network::cert_check::check_all_configured_certs;
+#[cfg(feature = "l7")]
+use crate::l7::network::cert_check::check_all_configured_certs;
+#[cfg(feature = "l7")]
 use tracing::{info, warn};
 
+#[cfg(feature = "l7")]
 pub async fn check_certs() -> Result<(), Box<dyn std::error::Error>> {
     info!("Checking TLS certificates...");
 
@@ -19,4 +25,9 @@ pub async fn check_certs() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Err("Issues with TLS certificates detected, see warnings above".into())
     }
+}
+
+#[cfg(not(feature = "l7"))]
+pub async fn check_certs() -> Result<(), Box<dyn std::error::Error>> {
+    Err("TLS certificate checks require the l7 feature".into())
 }

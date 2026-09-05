@@ -1,4 +1,4 @@
-.PHONY: ci fmt fmt-check clippy build test audit install-tools
+.PHONY: ci fmt fmt-check clippy build test audit load-smoke install-tools
 
 ci: fmt-check clippy build test audit
 
@@ -16,6 +16,9 @@ build:
 
 test:
 	cargo test
+
+load-smoke:
+	./scripts/load_smoke.sh $(URL)
 
 audit: install-tools
 	cargo audit

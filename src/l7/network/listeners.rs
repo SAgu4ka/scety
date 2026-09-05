@@ -1,9 +1,9 @@
 use crate::config::get_scety_config::scety_config;
 use crate::config::get_services_config::{ClientConfig, HeadersConfig, SslConfig};
 use crate::core::search_router::SearchRouter;
-use crate::http::error_pages::send;
-use crate::network::ip_limit;
-use crate::network::tls::{build_acme_config, load_manual_tls};
+use crate::l7::error_pages::send;
+use crate::l7::network::ip_limit;
+use crate::l7::network::tls::{build_acme_config, load_manual_tls};
 use futures::StreamExt;
 use httparse::{EMPTY_HEADER, Request, Status};
 use std::collections::HashMap;

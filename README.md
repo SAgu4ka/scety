@@ -52,6 +52,24 @@ cargo build --release
 sudo ./target/release/scety run
 ```
 
+### Proxy modules
+
+The proxy modules are compile-time features. The default build includes all modules:
+
+```bash
+cargo build --release
+```
+
+Build only an L4 proxy when HTTP and static serving are not needed:
+
+```bash
+cargo build --release --no-default-features --features l4
+```
+
+The available features are `l4`, `l7`, and `static`. The common runtime starts only the enabled
+modules and sends shutdown through one cancellation token. L4 configurations use `proxy_type =
+"L4"`; static configurations use `proxy_type = "STATIC"`.
+
 On first run outside of systemd, scety installs itself as a systemd service (creating the `scety`
 system user, the service unit, and `/etc/scety`) and starts it. From then on, manage it with the
 commands below.
@@ -90,6 +108,27 @@ listen_port = 80
 [upstream]
 port = 3000
 ```
+
+Minimal static HTTP config:
+
+```toml
+proxy_type = "STATIC"
+
+[[configs]]
+name = "site"
+host = "example.com"
+port = 8080
+
+[configs.mode]
+protocol = "tcp"
+http_version = "auto"
+files = "/var/www/site"
+```
+
+Static TCP and HTTP/3 modes serve `GET` and `HEAD` requests from a root directory or a `files`
+map and use the same host wildcard router as L7. Raw TCP sends the configured file as a stream;
+raw UDP sends it as a datagram response. Manual TLS is supported for TCP and raw TCP, and ACME TLS
+is supported for static HTTP over TCP. ACME is not available for raw TCP or HTTP/3 static modes.
 
 With TLS and custom headers:
 

@@ -8,6 +8,12 @@ pub mod lb;
 
 pub use config::L4ServiceConfig;
 
+pub struct L4Module;
+
+impl crate::core::runtime::ProxyModule for L4Module {
+    const PROXY_TYPE: &'static str = "L4";
+}
+
 pub struct L4ServiceManager;
 
 impl L4ServiceManager {

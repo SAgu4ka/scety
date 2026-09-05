@@ -24,6 +24,10 @@ struct Conn {
     client_fd: RawFd,
     upstream_fd: RawFd,
     state: ConnState,
+    backend: Arc<crate::l4::backend::BackendNode>,
+    _connection_guard: crate::l4::backend::ConnectionGuard,
+    connected_at: std::time::Instant,
+    last_activity: std::time::Instant,
 }
 
 #[derive(PartialEq, Eq)]
@@ -32,10 +36,24 @@ enum ConnState {
     Established,
 }
 
+fn close_conn(poll: &Poll, conn: &Conn) {
+    let mut client_source = MioSourceFd(&conn.client_fd);
+    let mut upstream_source = MioSourceFd(&conn.upstream_fd);
+    let _ = poll.registry().deregister(&mut client_source);
+    let _ = poll.registry().deregister(&mut upstream_source);
+    unsafe {
+        libc::close(conn.client_fd);
+        libc::close(conn.upstream_fd);
+    }
+}
+
 pub struct MioL4Worker;
 
 impl MioL4Worker {
-    pub fn spawn_thread_per_core(config: L4ServiceConfig, shutdown: Arc<AtomicBool>) {
+    pub fn spawn_thread_per_core(
+        config: L4ServiceConfig,
+        shutdown: Arc<AtomicBool>,
+    ) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             let cores = num_cpus::get();
             info!(service = %config.name, cores = cores, "Starting Thread-per-Core worker");
@@ -56,7 +74,7 @@ impl MioL4Worker {
             for h in handles {
                 let _ = h.join();
             }
-        });
+        })
     }
 
     fn worker_loop(
@@ -414,6 +432,8 @@ impl MioL4Worker {
             .map(|addr| Arc::new(crate::l4::backend::BackendNode::new(*addr)))
             .collect();
 
+        let lb = create_load_balancer(config.lb_strategy.clone(), nodes.clone());
+
         crate::l4::health::HealthOrchestrator::spawn_blocking(
             nodes.clone(),
             Duration::from_secs(5),
@@ -424,6 +444,28 @@ impl MioL4Worker {
         let pipe = PipeFd::new()?;
 
         while !shutdown.load(Ordering::Relaxed) {
+            let now = std::time::Instant::now();
+            let expired: Vec<usize> = conns
+                .iter()
+                .filter_map(|(index, conn)| {
+                    let timed_out = match conn.state {
+                        ConnState::Connecting => {
+                            now.duration_since(conn.connected_at) >= config.connect_timeout
+                        }
+                        ConnState::Established => {
+                            now.duration_since(conn.last_activity) >= config.idle_timeout
+                        }
+                    };
+                    timed_out.then_some(index)
+                })
+                .collect();
+            for index in expired {
+                if let Some(conn) = conns.get(index) {
+                    close_conn(&poll, conn);
+                }
+                let _ = conns.remove(index);
+            }
+
             poll.poll(&mut events, Some(Duration::from_millis(200)))?;
 
             for ev in &events {
@@ -437,13 +479,14 @@ impl MioL4Worker {
                                 let client_fd = stream.as_raw_fd();
                                 std::mem::forget(stream);
 
-                                let upstream_addr = match config.upstreams.first() {
-                                    Some(a) => *a,
+                                let backend = match lb.select(addr) {
+                                    Some(backend) => backend,
                                     None => {
                                         unsafe { libc::close(client_fd) };
                                         continue;
                                     }
                                 };
+                                let upstream_addr = backend.addr;
 
                                 let domain = if upstream_addr.is_ipv4() {
                                     Domain::IPV4
@@ -451,6 +494,7 @@ impl MioL4Worker {
                                     Domain::IPV6
                                 };
                                 let usock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+                                usock.set_tcp_nodelay(config.tcp_nodelay)?;
                                 usock.set_nonblocking(true)?;
                                 let _ = usock.connect(&upstream_addr.into());
                                 let upstream_fd = usock.into_raw_fd();
@@ -477,6 +521,12 @@ impl MioL4Worker {
                                     client_fd,
                                     upstream_fd,
                                     state: ConnState::Connecting,
+                                    backend: backend.clone(),
+                                    _connection_guard: crate::l4::backend::ConnectionGuard::new(
+                                        backend,
+                                    ),
+                                    connected_at: std::time::Instant::now(),
+                                    last_activity: std::time::Instant::now(),
                                 });
                                 debug!(worker = thread_id, upstream = %addr, "Accepted connection, conn_id={}", key);
                             }
@@ -511,8 +561,10 @@ impl MioL4Worker {
                                 };
                                 if rc == 0 && err == 0 {
                                     mut_conn.state = ConnState::Established;
+                                    mut_conn.backend.mark_success(1);
                                     debug!(worker = thread_id, conn = idx, "Upstream connected");
                                 } else {
+                                    mut_conn.backend.mark_failure(3);
                                     let mut src_c_close = MioSourceFd(&mut_conn.client_fd);
                                     let mut src_u_close = MioSourceFd(&mut_conn.upstream_fd);
                                     let _ = poll.registry().deregister(&mut src_c_close);
@@ -554,6 +606,7 @@ impl MioL4Worker {
                                         )
                                     };
                                     if n > 0 {
+                                        mut_conn.last_activity = std::time::Instant::now();
                                         let mut rem = n;
                                         while rem > 0 {
                                             let w = unsafe {

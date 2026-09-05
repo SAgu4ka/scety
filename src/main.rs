@@ -10,11 +10,12 @@ mod _core;
 mod cli;
 mod config;
 mod core;
-mod http;
+#[cfg(feature = "l4")]
 mod l4;
+#[cfg(feature = "l7")]
 mod l7;
+#[cfg(feature = "static")]
 mod lstatic;
-mod network;
 
 async fn run_command<F, Fut>(f: F)
 where

@@ -30,6 +30,9 @@ jobs:
       - name: Build
         run: cargo build --verbose
 
+      - name: Production build
+        run: cargo build --release --verbose
+
       - name: Test
         run: cargo test --verbose
 
@@ -38,6 +41,45 @@ jobs:
 
       - name: Format check
         run: cargo fmt --check
+
+  feature-builds:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: no-modules
+            args: --no-default-features
+          - name: l4
+            args: --no-default-features --features l4
+          - name: l7
+            args: --no-default-features --features l7
+          - name: static
+            args: --no-default-features --features static
+          - name: all
+            args: --features l4,l7,static
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check ${{ matrix.name }}
+        run: cargo check ${{ matrix.args }}
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run fuzz smoke
+        run: cargo +nightly fuzz run host-router -- -max_total_time=10
 
   security-audit:
     runs-on: ubuntu-latest

@@ -128,6 +128,20 @@ pub fn validate_static_configs(configs: &[StaticConfig]) -> (bool, u16) {
             );
             warnings += 1;
         }
+
+        let acme_unsupported = match &config.mode {
+            TransportProtocol::Http3 { ssl, .. }
+            | TransportProtocol::RawTcp { ssl: Some(ssl), .. } => ssl.acme.unwrap_or(false),
+            _ => false,
+        };
+        if acme_unsupported {
+            error!(
+                config_idx = idx,
+                service = %config.name,
+                "ACME is unsupported for this static transport mode"
+            );
+            has_errors = true;
+        }
     }
 
     (!has_errors, warnings)

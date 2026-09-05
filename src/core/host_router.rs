@@ -19,6 +19,12 @@ pub struct HostRouter {
     catch_all: Option<usize>,
 }
 
+impl Default for HostRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HostRouter {
     pub fn new() -> Self {
         Self {
