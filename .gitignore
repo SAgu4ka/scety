@@ -5,3 +5,4 @@ test.sh
 fuzz/artifacts
 fuzz/corpus
 fuzz/target
+_src
