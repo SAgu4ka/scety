@@ -1,3 +1,9 @@
+[workspace]
+members = [
+    ".",
+    "_src"
+]
+
 [package]
 name = "scety"
 version = "0.1.1"
