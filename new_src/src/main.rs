@@ -12,6 +12,8 @@ mod cli;
 mod core;
 mod settings;
 
+include!(concat!(env!("OUT_DIR"), "/generated_settings.rs"));
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()

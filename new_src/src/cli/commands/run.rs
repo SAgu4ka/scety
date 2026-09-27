@@ -7,7 +7,10 @@ use tracing::error;
 use crate::cli::commands::install::install;
 
 static SYSTEMD_RUN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"/(system\.slice|user\.slice/.*|app\.slice)/(run-[ru]\d+|[a-zA-Z0-9_-]+)\.(service|scope)").unwrap()
+    Regex::new(
+        r"/(system\.slice|user\.slice/.*|app\.slice)/(run-[ru]\d+|[a-zA-Z0-9_-]+)\.(service|scope)",
+    )
+    .unwrap()
 });
 
 pub async fn run(force_install: bool, force_start: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -42,7 +45,7 @@ fn verify_systemd_run() -> Result<(), &'static str> {
     }
 
     let parent_comm = fs::read_to_string(format!("/proc/{}/comm", ppid))
-    .map_err(|_| "Failed to verify the parent process")?;
+        .map_err(|_| "Failed to verify the parent process")?;
 
     if !parent_comm.trim().starts_with("systemd") {
         return Err("Security violation: the parent process is not systemd");

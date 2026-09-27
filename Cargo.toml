@@ -1,7 +1,7 @@
 [workspace]
 members = [
     ".",
-    "_src"
+    "new_src"
 ]
 
 [package]
