@@ -3,8 +3,8 @@ use tracing::warn;
 
 use crate::cli::{
     Cli,
-    Commands::{Reload, Status, Stop},
-    commands::{reload::reload, status::status, stop::stop},
+    Commands::{Install, Reload, Status, Stop, Uninstall},
+    commands::{install::install, reload::reload, status::status, stop::stop, uninstall::uninstall},
     print_full_help,
 };
 
@@ -29,6 +29,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
+        Some(Install { force_reinstall }) => {
+            install(*force_reinstall)?;
+        }
+        Some(Uninstall) => {
+            uninstall()?;
+        }
         Some(Reload) => {
             reload()?;
         }
