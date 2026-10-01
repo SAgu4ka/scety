@@ -138,10 +138,10 @@ impl ScetyCore {
         let new_all_configs = scety_configs::get_all_configs().ok().unwrap_or_default();
 
         for (name, tx) in self.reload_senders.iter() {
-            if let Some(new_configs) = new_all_configs.get(name) {
-                if let Err(e) = tx.send(new_configs.clone()).await {
-                    error!(module = %name, error = %e, "Failed to send reload event to module");
-                }
+            if let Some(new_configs) = new_all_configs.get(name)
+                && let Err(e) = tx.send(new_configs.clone()).await
+            {
+                error!(module = %name, error = %e, "Failed to send reload event to module");
             }
         }
 
@@ -155,9 +155,7 @@ impl ScetyCore {
     }
 
     fn check_all_configs(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let all_configs = scety_configs::get_all_configs()
-            .ok()
-            .unwrap_or(HashMap::new());
+        let all_configs = scety_configs::get_all_configs().ok().unwrap_or_default();
 
         let empty_vec = Vec::new();
 

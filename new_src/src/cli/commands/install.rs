@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::{fs, io::Error, path::Path};
 use tracing::{error, info, warn};
 
-use crate::{SCETY_USER, settings::MAIN_SCETY_PATH};
+use crate::{MAIN_SCETY_PATH, SCETY_USER};
 
 const MAIN_SCETY_CONFIG: &str = include_str!("../../models/default_scety_config.toml");
 

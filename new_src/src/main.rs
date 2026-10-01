@@ -4,13 +4,14 @@ use tracing::warn;
 use crate::cli::{
     Cli,
     Commands::{Install, Reload, Status, Stop, Uninstall},
-    commands::{install::install, reload::reload, status::status, stop::stop, uninstall::uninstall},
+    commands::{
+        install::install, reload::reload, status::status, stop::stop, uninstall::uninstall,
+    },
     print_full_help,
 };
 
 mod cli;
 mod core;
-mod settings;
 
 include!(concat!(env!("OUT_DIR"), "/generated_settings.rs"));
 

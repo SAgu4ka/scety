@@ -1802,6 +1802,7 @@ dependencies = [
  "regex",
  "reqwest",
  "serde",
+ "serde-inline-default",
  "tokio",
  "tokio-util",
  "toml 1.1.4+spec-1.1.0",
@@ -1862,6 +1863,17 @@ checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-inline-default"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a024ee82abb97858516d2539fa845e6ef82ef57fdede6833ca24ed26425b614"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]

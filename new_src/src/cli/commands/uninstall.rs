@@ -1,4 +1,4 @@
-use crate::{SCETY_USER, cli::commands::status::get_status, settings::MAIN_SCETY_PATH};
+use crate::{MAIN_SCETY_PATH, SCETY_USER, cli::commands::status::get_status};
 use nix::unistd::User;
 use std::{
     fs::{remove_dir_all, remove_file},
@@ -85,10 +85,10 @@ pub fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
 
     if exe_path.exists() {
         debug!(path = ?exe_path, "Deleting exe");
-        if let Err(err) = remove_file(&exe_path) {
-            if err.kind() != ErrorKind::NotFound {
-                warn!(path = ?exe_path, error = %err, "Failed to delete exe file");
-            }
+        if let Err(err) = remove_file(&exe_path)
+            && err.kind() != ErrorKind::NotFound
+        {
+            warn!(path = ?exe_path, error = %err, "Failed to delete exe file");
         }
     }
 

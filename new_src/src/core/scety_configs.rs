@@ -1,4 +1,4 @@
-use crate::settings::{
+use crate::{
     ALLOW_FOLLOW_NONBASE_SYMLINK_DIR, ALLOW_LINKS_IN_CONFIGS_DIR, MAIN_SCETY_PATH,
     MAX_CONFIG_SIZE_BYTES,
 };
