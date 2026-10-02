@@ -18,9 +18,8 @@ struct ConfigsSettings {
 #[serde_inline_default]
 #[derive(Deserialize, Default)]
 struct Settings {
-    #[serde(default)]
-    custom_modules: Vec<String>,
-
+    // #[serde(default)]
+    // custom_modules: Vec<String>,
     #[serde_inline_default("/var/lib/scety".to_string())]
     main_path: String,
 
@@ -53,41 +52,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     }
 
-    let client = reqwest::blocking::Client::new();
+    // let client = reqwest::blocking::Client::new();
 
-    let mut all_module_paths = Vec::new();
+    // let mut all_module_paths = Vec::new();
 
-    for (i, raw_url) in settings.custom_modules.iter().enumerate() {
-        let clean_url = raw_url.replace('\\', "/");
+    // for (i, raw_url) in settings.custom_modules.iter().enumerate() {
+    //     let clean_url = raw_url.replace('\\', "/");
 
-        let download_url = normalize_github_url(&clean_url);
+    //     let download_url = normalize_github_url(&clean_url);
 
-        let module_filename = format!("module_{}.rs", i);
-        let target_path = dest_dir.join(&module_filename);
+    //     let module_filename = format!("module_{}.rs", i);
+    //     let target_path = dest_dir.join(&module_filename);
 
-        match client.get(&download_url).send() {
-            Ok(response) if response.status().is_success() => {
-                if let Ok(content) = response.text() {
-                    fs::write(&target_path, content)?;
-                    all_module_paths.push(target_path.to_string_lossy().to_string());
-                }
-            }
-            _ => {
-                println!("cargo:warning=Failed to download module from {}", clean_url);
-            }
-        }
-    }
+    //     match client.get(&download_url).send() {
+    //         Ok(response) if response.status().is_success() => {
+    //             if let Ok(content) = response.text() {
+    //                 fs::write(&target_path, content)?;
+    //                 all_module_paths.push(target_path.to_string_lossy().to_string());
+    //             }
+    //         }
+    //         _ => {
+    //             println!("cargo:warning=Failed to download module from {}", clean_url);
+    //         }
+    //     }
+    // }
 
     let generated_code = format!(
-        r#"pub static MODULE_PATHS: &[&str] = &{:?};
-pub static MAIN_PATH: &str = {:?};
+        // pub static MODULE_PATHS: &[&str] = &{:?};
+        r#"pub static MAIN_PATH: &str = {:?};
 pub static SCETY_USER: &str = {:?};
 pub const MAX_CONFIG_SIZE_BYTES: u64 = {:?};
 pub const ALLOW_LINKS_IN_CONFIGS_DIR: bool = {:?};
 pub const ALLOW_FOLLOW_NONBASE_SYMLINK_DIR: bool = {:?};
 pub const MAIN_SCETY_PATH: &str = {:?};
     "#,
-        all_module_paths,
+        // all_module_paths,
         settings.main_path,
         settings.scety_user,
         settings.configs_settings.max_config_size_bytes,
@@ -102,11 +101,11 @@ pub const MAIN_SCETY_PATH: &str = {:?};
     Ok(())
 }
 
-fn normalize_github_url(url: &str) -> String {
-    if url.contains("github.com") && !url.contains("raw.githubusercontent.com") {
-        url.replace("github.com", "raw.githubusercontent.com")
-            .replace("/blob/", "/")
-    } else {
-        url.to_string()
-    }
-}
+// fn normalize_github_url(url: &str) -> String {
+//     if url.contains("github.com") && !url.contains("raw.githubusercontent.com") {
+//         url.replace("github.com", "raw.githubusercontent.com")
+//             .replace("/blob/", "/")
+//     } else {
+//         url.to_string()
+//     }
+// }

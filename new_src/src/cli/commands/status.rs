@@ -3,7 +3,7 @@ use std::thread;
 use std::time::Duration;
 use tracing::{info, warn};
 
-pub fn get_status() -> Result<(String, u64), Box<dyn std::error::Error>> {
+pub fn get_status() -> Result<(String, u64), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let output = Command::new("systemctl")
         .args(["status", "scety"])
         .output()?;
@@ -23,7 +23,7 @@ pub fn status(
     follow: bool,
     checks: Option<u16>,
     interval: Option<u32>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     if follow {
         loop {
             let status = get_status()?;

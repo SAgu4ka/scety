@@ -52,7 +52,9 @@ SystemCallErrorNumber=EPERM
 [Install]
 WantedBy=multi-user.target";
 
-pub fn install(force_reinstall: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub fn install(
+    force_reinstall: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     if !nix::unistd::Uid::effective().is_root() {
         error!("Run as root or with sudo");
         return Err(Box::new(Error::new(
@@ -124,7 +126,7 @@ pub fn install(force_reinstall: bool) -> Result<(), Box<dyn std::error::Error>> 
 
     Ok(())
 }
-fn ensure_system_user() -> Result<(), Box<dyn std::error::Error>> {
+fn ensure_system_user() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     if User::from_name(SCETY_USER)?.is_some() {
         return Ok(());
     }
@@ -148,7 +150,7 @@ fn ensure_system_user() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn maybe_join_ssl_cert_group() -> Result<(), Box<dyn std::error::Error>> {
+fn maybe_join_ssl_cert_group() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     if Group::from_name("ssl-cert")?.is_none() {
         return Ok(());
     }
@@ -170,7 +172,9 @@ fn maybe_join_ssl_cert_group() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn configure_permissions(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn configure_permissions(
+    config_path: &Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let scety = User::from_name(SCETY_USER)?.ok_or("scety user must exist by this point")?;
     let uid = scety.uid;
     let gid = scety.gid;

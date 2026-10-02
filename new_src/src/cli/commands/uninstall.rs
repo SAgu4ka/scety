@@ -8,7 +8,7 @@ use std::{
 };
 use tracing::{debug, error, info, warn};
 
-pub fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
+pub fn uninstall() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     if !nix::unistd::Uid::effective().is_root() {
         error!("Run as root or with sudo");
         return Err(Box::new(Error::new(

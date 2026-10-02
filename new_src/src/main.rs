@@ -3,9 +3,10 @@ use tracing::warn;
 
 use crate::cli::{
     Cli,
-    Commands::{Install, Reload, Status, Stop, Uninstall},
+    Commands::{Install, Reload, Run, Status, Stop, Uninstall},
     commands::{
-        install::install, reload::reload, status::status, stop::stop, uninstall::uninstall,
+        install::install, reload::reload, run::run, status::status, stop::stop,
+        uninstall::uninstall,
     },
     print_full_help,
 };
@@ -16,7 +17,7 @@ mod core;
 include!(concat!(env!("OUT_DIR"), "/generated_settings.rs"));
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     tracing_subscriber::fmt()
         .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
             "%Y-%m-%d %H:%M:%S".to_string(),
@@ -30,6 +31,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
+        Some(Run {
+            force_install,
+            force_start,
+        }) => {
+            run(*force_install, *force_start).await?;
+        }
         Some(Install { force_reinstall }) => {
             install(*force_reinstall)?;
         }
