@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::{fs, io::Error, path::Path};
 use tracing::{error, info, warn};
 
-use crate::{MAIN_SCETY_PATH, SCETY_USER};
+use crate::{DynResult, MAIN_SCETY_PATH, SCETY_USER};
 
 const MAIN_SCETY_CONFIG: &str = include_str!("../../models/default_scety_config.toml");
 
@@ -52,9 +52,7 @@ SystemCallErrorNumber=EPERM
 [Install]
 WantedBy=multi-user.target";
 
-pub fn install(
-    force_reinstall: bool,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+pub fn install(force_reinstall: bool) -> DynResult<()> {
     if !nix::unistd::Uid::effective().is_root() {
         error!("Run as root or with sudo");
         return Err(Box::new(Error::new(
@@ -126,7 +124,7 @@ pub fn install(
 
     Ok(())
 }
-fn ensure_system_user() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+fn ensure_system_user() -> DynResult<()> {
     if User::from_name(SCETY_USER)?.is_some() {
         return Ok(());
     }
@@ -150,7 +148,7 @@ fn ensure_system_user() -> Result<(), Box<dyn std::error::Error + Send + Sync + 
     Ok(())
 }
 
-fn maybe_join_ssl_cert_group() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+fn maybe_join_ssl_cert_group() -> DynResult<()> {
     if Group::from_name("ssl-cert")?.is_none() {
         return Ok(());
     }
@@ -172,9 +170,7 @@ fn maybe_join_ssl_cert_group() -> Result<(), Box<dyn std::error::Error + Send + 
     Ok(())
 }
 
-fn configure_permissions(
-    config_path: &Path,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+fn configure_permissions(config_path: &Path) -> DynResult<()> {
     let scety = User::from_name(SCETY_USER)?.ok_or("scety user must exist by this point")?;
     let uid = scety.uid;
     let gid = scety.gid;

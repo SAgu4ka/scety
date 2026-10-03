@@ -1,5 +1,6 @@
+use crate::DynResult;
 use async_trait::async_trait;
-use std::error::Error;
+use std::time::Duration;
 use std::{
     collections::{HashMap, HashSet},
     io::ErrorKind,
@@ -8,7 +9,7 @@ use std::{
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub mod scety_configs;
 
@@ -54,12 +55,12 @@ pub trait Module: Send + Sync + 'static {
         token: CancellationToken,
         configs: Vec<PathBuf>,
         reload_rx: mpsc::Receiver<Vec<PathBuf>>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+    ) -> DynResult<()>;
 }
 
 pub struct ScetyCore {
     modules: HashMap<String, Box<dyn Module>>,
-    ports: Option<HashSet<u16>>,
+    ports: HashSet<u16>,
     all_configs: HashMap<String, Vec<PathBuf>>,
     yet_init: bool,
     yet_running: bool,
@@ -71,7 +72,7 @@ impl ScetyCore {
     pub fn new() -> Self {
         Self {
             modules: HashMap::new(),
-            ports: None,
+            ports: HashSet::new(),
             all_configs: HashMap::new(),
             yet_init: false,
             yet_running: false,
@@ -80,35 +81,82 @@ impl ScetyCore {
         }
     }
 
-    pub fn init(
-        &mut self,
-        modules: Vec<Box<dyn Module>>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub fn init(&mut self, modules: Vec<Box<dyn Module>>) -> DynResult<()> {
         if self.yet_init || self.yet_running {
-            return Err(Box::new(std::io::Error::new(
+            return Err(std::io::Error::new(
                 ErrorKind::ConnectionAborted,
-                "Core init yet!",
-            )));
+                "Core already initialized or running",
+            )
+            .into());
         }
-        self.add_modules(modules);
-        self.check_all_configs()?;
+
+        let mut new_modules: HashMap<String, Box<dyn Module>> = HashMap::new();
+        for module in modules {
+            let name = module.config_type_name().to_string();
+            if new_modules.contains_key(&name) {
+                return Err(format!("Duplicate module name: {}", name).into());
+            }
+            new_modules.insert(name, module);
+        }
+
+        let all_configs = scety_configs::get_all_configs()?;
+        let mut new_ports = HashSet::new();
+
+        for (name, module) in new_modules.iter() {
+            let empty = Vec::new();
+            let configs = all_configs.get(name).unwrap_or(&empty);
+            let result = module.check_config(configs);
+
+            if !result.success {
+                if let Some(problem_files) = result.problem_files {
+                    for file in problem_files {
+                        error!(module = module.config_type_name(), file = ?file,
+                            "Configuration validation error in file");
+                    }
+                }
+                return Err(format!(
+                    "Module '{}' failed configuration validation.",
+                    module.config_type_name()
+                )
+                .into());
+            }
+
+            for port in result.ports {
+                if !new_ports.insert(port) {
+                    return Err(format!(
+                        "Port collision detected: Port {} is already in use.",
+                        port
+                    )
+                    .into());
+                }
+            }
+        }
+
+        self.modules = new_modules;
+        self.all_configs = all_configs;
+        self.ports = new_ports;
         self.yet_init = true;
         Ok(())
     }
 
-    pub async fn run(
-        &mut self,
-    ) -> Result<JoinSet<Result<(), Box<dyn Error + Send + Sync>>>, Box<dyn Error + Send + Sync>>
-    {
+    pub async fn run(&mut self) -> DynResult<JoinSet<DynResult<()>>> {
         if !self.yet_init {
             return Err(Box::new(std::io::Error::new(
                 ErrorKind::ConnectionAborted,
                 "Core not init yet!",
             )));
+        } else if self.yet_running {
+            return Err(Box::new(std::io::Error::new(
+                ErrorKind::ConnectionAborted,
+                "Core running yet!",
+            )));
         }
 
         let modules_count = self.modules.len();
-        let mut set: JoinSet<Result<(), Box<dyn Error + Send + Sync>>> = JoinSet::new();
+        if modules_count == 0 {
+            warn!("No modules configured; core will run idle");
+        }
+        let mut set: JoinSet<DynResult<()>> = JoinSet::new();
 
         for (name, mut module) in self.modules.drain() {
             let token_clone = self.cancel_token.clone();
@@ -132,18 +180,20 @@ impl ScetyCore {
         Ok(set)
     }
 
-    pub async fn reload(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn reload(&mut self) -> DynResult<()> {
         info!("Reloading all module configurations...");
 
-        let new_all_configs = scety_configs::get_all_configs().ok().unwrap_or_default();
+        let new_all_configs = scety_configs::get_all_configs()?;
 
         for (name, tx) in self.reload_senders.iter() {
-            if let Some(new_configs) = new_all_configs.get(name)
-                && let Err(e) = tx.send(new_configs.clone()).await
-            {
-                error!(module = %name, error = %e, "Failed to send reload event to module");
+            let new_configs = new_all_configs.get(name).cloned().unwrap_or_default();
+            match tokio::time::timeout(Duration::from_secs(2), tx.send(new_configs)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => error!(module = %name, error = %e, "Reload send failed"),
+                Err(_) => error!(module = %name, "Reload send timed out; module stuck?"),
             }
         }
+        info!("All module configurations reloaded successfully");
 
         self.all_configs = new_all_configs;
         Ok(())
@@ -152,57 +202,5 @@ impl ScetyCore {
     pub fn shutdown(&self) {
         info!("Initiating graceful shutdown...");
         self.cancel_token.cancel();
-    }
-
-    fn check_all_configs(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let all_configs = scety_configs::get_all_configs().ok().unwrap_or_default();
-
-        let empty_vec = Vec::new();
-
-        for (name, module) in self.modules.iter() {
-            let configs = all_configs.get(name).unwrap_or(&empty_vec);
-            let result = module.check_config(configs);
-
-            if !result.success {
-                if let Some(problem_files) = result.problem_files {
-                    for file in problem_files {
-                        error!(module=module.config_type_name(), file=?file, "Configuration validation error in file");
-                    }
-                }
-                error!(
-                    module = module.config_type_name(),
-                    "Module failed configuration validation."
-                );
-                return Err(format!(
-                    "Module '{}' failed configuration validation.",
-                    module.config_type_name()
-                )
-                .into());
-            }
-
-            for port in result.ports {
-                if !self.ports.get_or_insert_with(HashSet::new).insert(port) {
-                    error!(
-                        module = module.config_type_name(),
-                        port = port,
-                        "Port collision detected: Port is already in use by another module."
-                    );
-                    return Err(format!(
-                        "Port collision detected: Port {} is already in use by another module.",
-                        port
-                    )
-                    .into());
-                }
-            }
-        }
-        self.all_configs = all_configs;
-        Ok(())
-    }
-
-    fn add_modules(&mut self, modules: Vec<Box<dyn Module>>) {
-        for module in modules {
-            let name = module.config_type_name().to_string();
-            self.modules.insert(name, module);
-        }
     }
 }

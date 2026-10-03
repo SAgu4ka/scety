@@ -15,9 +15,11 @@ mod cli;
 mod core;
 
 include!(concat!(env!("OUT_DIR"), "/generated_settings.rs"));
+const PID_PATH: &str = "/run/scety/scety.sock";
+pub type DynResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+async fn main() -> DynResult<()> {
     tracing_subscriber::fmt()
         .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
             "%Y-%m-%d %H:%M:%S".to_string(),
@@ -44,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
             uninstall()?;
         }
         Some(Reload) => {
-            reload()?;
+            reload().await?;
         }
         Some(Status {
             follow,

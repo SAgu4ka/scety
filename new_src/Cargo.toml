@@ -18,7 +18,8 @@ walkdir = "2"
 rayon = "1"
 serde = { version = "1.0", features = ["derive"] }
 regex = "1"
-nix = { version = "0.31", features = ["process", "user", "fs"] }
+nix = { version = "0.31", features = ["process", "user", "fs", "signal"] }
+libc = "0.2"
 
 [build-dependencies]
 toml = "1"

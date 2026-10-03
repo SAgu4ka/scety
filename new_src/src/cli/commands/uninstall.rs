@@ -1,4 +1,4 @@
-use crate::{MAIN_SCETY_PATH, SCETY_USER, cli::commands::status::get_status};
+use crate::{DynResult, MAIN_SCETY_PATH, SCETY_USER, cli::commands::status::get_status};
 use nix::unistd::User;
 use std::{
     fs::{remove_dir_all, remove_file},
@@ -8,7 +8,7 @@ use std::{
 };
 use tracing::{debug, error, info, warn};
 
-pub fn uninstall() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+pub fn uninstall() -> DynResult<()> {
     if !nix::unistd::Uid::effective().is_root() {
         error!("Run as root or with sudo");
         return Err(Box::new(Error::new(

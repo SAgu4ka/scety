@@ -1,3 +1,4 @@
+use crate::DynResult;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -19,11 +20,7 @@ pub fn get_status() -> Result<(String, u64), Box<dyn std::error::Error + Send + 
     }
 }
 
-pub fn status(
-    follow: bool,
-    checks: Option<u16>,
-    interval: Option<u32>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+pub fn status(follow: bool, checks: Option<u16>, interval: Option<u32>) -> DynResult<()> {
     if follow {
         loop {
             let status = get_status()?;

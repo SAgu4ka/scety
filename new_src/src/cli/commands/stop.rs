@@ -1,8 +1,8 @@
-use crate::cli::commands::status::get_status;
+use crate::{DynResult, cli::commands::status::get_status};
 use std::process::Command;
 use tracing::{error, info};
 
-pub fn stop(force: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+pub fn stop(force: bool) -> DynResult<()> {
     let (_, status_id) = get_status()?;
 
     match status_id {
