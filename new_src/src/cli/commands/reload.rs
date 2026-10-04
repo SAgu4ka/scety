@@ -40,15 +40,15 @@ pub async fn reload() -> DynResult<()> {
                     .args(["restart", "scety"])
                     .status()?;
                 info!("Scety restarted successfully");
-                return Ok(());
+                Ok(())
             }
             3 => {
                 error!("Scety is not installed yet!");
-                return Err("Scety is not installed yet!".into());
+                Err("Scety is not installed yet!".into())
             }
             other => {
                 error!(id = other, "Unexpected service status ID");
-                return Err(format!("Unexpected service status ID: {other}").into());
+                Err(format!("Unexpected service status ID: {other}").into())
             }
         }
     }

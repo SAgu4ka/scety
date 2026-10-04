@@ -17,6 +17,7 @@ async-trait = "0.1"
 walkdir = "2"
 rayon = "1"
 serde = { version = "1.0", features = ["derive"] }
+serde-inline-default = "1.0.2"
 regex = "1"
 nix = { version = "0.31", features = ["process", "user", "fs", "signal"] }
 libc = "0.2"

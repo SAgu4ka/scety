@@ -13,6 +13,7 @@ use crate::cli::{
 
 mod cli;
 mod core;
+mod modules;
 
 include!(concat!(env!("OUT_DIR"), "/generated_settings.rs"));
 const PID_PATH: &str = "/run/scety/scety.sock";
