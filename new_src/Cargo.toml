@@ -5,8 +5,11 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/SAgu4ka/scety"
 
-[dependencies]
+[features]
+default = ["mstatic"]
+mstatic = []
 
+[dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 tracing = "0.1"
@@ -19,8 +22,9 @@ rayon = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde-inline-default = "1.0.2"
 regex = "1"
-nix = { version = "0.31", features = ["process", "user", "fs", "signal"] }
+nix = { version = "0.32", features = ["process", "user", "fs", "signal"] }
 libc = "0.2"
+
 
 [build-dependencies]
 toml = "1"

@@ -205,5 +205,10 @@ async fn start_core() -> DynResult<()> {
 }
 
 fn prepare_list_modules() -> Vec<Box<dyn Module>> {
-    Vec::<Box<dyn Module>>::new() // This part will be implemented later
+    let mut modules: Vec<Box<dyn Module>> = Vec::new();
+
+    #[cfg(feature = "mstatic")]
+    modules.push(Box::new(crate::modules::mstatic::StaticModule::new()));
+
+    modules
 }
