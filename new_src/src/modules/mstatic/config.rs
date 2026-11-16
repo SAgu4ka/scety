@@ -86,6 +86,7 @@ impl TransportProtocol {
 pub struct StaticConfig {
     pub name: String,
     pub host: String,
+    // pub bind_addr: String,
     pub port: u16,
     pub mode: TransportProtocol,
 }

@@ -12,6 +12,8 @@ mstatic = []
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
+tokio-rustls = { version = "0.26", optional = true }
+tokio-rustls-acme = { version = "0.9", optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.23", features = ["chrono", "env-filter"] }
 clap = { version = "4", features = ["derive"] }
@@ -24,7 +26,8 @@ serde-inline-default = "1.0.2"
 regex = "1"
 nix = { version = "0.32", features = ["process", "user", "fs", "signal"] }
 libc = "0.2"
-
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+rustls-pki-types = { version = "1", features = ["std"], optional = true }
 
 [build-dependencies]
 toml = "1"

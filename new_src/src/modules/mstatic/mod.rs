@@ -1,11 +1,19 @@
+use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf};
-
 use std::fs::read_to_string;
-
+use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
+use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::ServerConfig;
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use tokio::io::AsyncWriteExt;
 use tracing::{error, info, warn};
+use crate::modules::mstatic::config::SslConfig;
 use crate::{
-    DynResult, core::{ConfigValidationResult, Module}, modules::mstatic::config::{StaticConfig, TransportProtocol, validate_static_configs},
+    DynResult,
+    core::{ConfigValidationResult, Module},
+    modules::mstatic::config::{StaticConfig, TransportProtocol, validate_static_configs},
 };
 
 pub mod config;
@@ -21,7 +29,8 @@ impl StaticModule {
         if configs.len() == 1 {
             match &configs[0].mode {
                 TransportProtocol::RawTcp { ssl, path } => {
-                    todo!()
+                    self.start_raw_tcp_port(port, ssl, path, token);
+                    return;
                 }
                 TransportProtocol::RawUdp { path } => {
                     self.start_raw_udp_port(port, path, token).await;
@@ -37,13 +46,111 @@ impl StaticModule {
         }
     }
 
+    async fn start_raw_tcp_port(&self, port: u16, ssl: &Option<SslConfig>, path: &PathBuf, token: CancellationToken) {
+        if let Some(ssl) = ssl {
+            self.start_tls_raw_tcp_port(port, path, ssl, token).await;
+            return;
+        }
+        // compile_error!("Unimplemented variable below");
+        let ip = "0.0.0.0";
+        let listener = match TcpListener::bind((ip, port)).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                error!(%error, bind=ip, port, "Raw TCP static listener bind failed");
+                return;
+            }
+        };
+
+        let content = match tokio::fs::read(&path).await {
+            Ok(content) => Arc::new(content),
+            Err(error) => {
+                error!(%error, path = %path.display(), "Raw TCP static file read failed");
+                return;
+            }
+        };
+
+        info!(bind=ip, port, path = %path.display(), "Raw TCP static listener started");
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => break,
+                result = listener.accept() => match result {
+                    Ok((mut stream, _)) => {
+                        let content = Arc::clone(&content);
+                        tokio::spawn(async move { let _ = stream.write_all(&content).await; });
+                    }
+                    Err(error) => error!(%error, port, "Raw TCP static accept failed"),
+                }
+            }
+        }
+    }
+
+    async fn start_tls_raw_tcp_port(&self, port: u16, path: &PathBuf, ssl: &SslConfig, token: CancellationToken) {
+        let Some(acceptor) = self.load_tls_acceptor(&ssl) else {
+            if ssl.acme.unwrap_or(false) {
+                error!(port, "ACME is not supported for raw TCP static mode");
+            }
+            return;
+        };
+        // compile_error!("Unimplemented variable below");
+        let ip = "0.0.0.0";
+        let listener = match TcpListener::bind((ip, port)).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                error!(%error, bind=ip, port, "TLS raw TCP static listener bind failed");
+                return;
+            }
+        };
+        let content = match tokio::fs::read(&path).await {
+            Ok(content) => Arc::new(content),
+            Err(error) => {
+                error!(%error, path = %path.display(), "TLS raw TCP static file read failed");
+                return;
+            }
+        };
+        loop {
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    result = listener.accept() => match result {
+                        Ok((stream, _)) => {
+                            let acceptor = acceptor.clone();
+                            let content = Arc::clone(&content);
+                            tokio::spawn(async move {
+                                if let Ok(mut stream) = acceptor.accept(stream).await {
+                                    let _ = stream.write_all(&content).await;
+                                }
+                            });
+                        }
+                        Err(error) => error!(%error, bind=ip, port, "TLS raw TCP static accept failed"),
+                    }
+                }
+            }
+    }
+
+    fn load_tls_acceptor(&self, ssl: &SslConfig) -> Option<TlsAcceptor> {
+        if ssl.acme.unwrap_or(false) {
+            return None;
+        }
+        let cert_path = ssl.cert.as_deref()?;
+        let key_path = ssl.key.as_deref()?;
+        let certs = CertificateDer::pem_file_iter(cert_path)
+            .ok()?
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let key = PrivateKeyDer::from_pem_file(key_path).ok()?;
+        let config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .ok()?;
+        Some(TlsAcceptor::from(Arc::new(config)))
+    }
+
     async fn start_raw_udp_port(&self, port: u16, path: &PathBuf, token: CancellationToken) {
-        compile_error!("Unimplemented variable below");
+        // compile_error!("Unimplemented variable below");
         let ip = "0.0.0.0";
         let socket = match tokio::net::UdpSocket::bind((ip, port)).await {
             Ok(socket) => socket,
             Err(error) => {
-                error!(%error, port, "Raw UDP static listener bind failed");
+                error!(%error, bind=ip, port, "Raw UDP static listener bind failed");
                 return;
             }
         };
@@ -64,7 +171,7 @@ impl StaticModule {
         token: CancellationToken,
         path: &PathBuf,
     ) {
-        let mut request = [0u8, 65536];
+        let mut request = [0u8; 65536];
         info!(address=?socket.local_addr(), path=?path, "Raw UDP static listener started");
         loop {
             tokio::select! {
