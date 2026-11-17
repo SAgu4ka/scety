@@ -50,7 +50,7 @@ pub enum Files {
 pub enum TransportProtocol {
     Tcp {
         ssl: Option<SslConfig>,
-        http_verxion: HttpVersion,
+        http_version: HttpVersion,
         files: Files,
     },
     Http3 {

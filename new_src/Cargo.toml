@@ -7,7 +7,7 @@ repository = "https://github.com/SAgu4ka/scety"
 
 [features]
 default = ["mstatic"]
-mstatic = []
+mstatic = ["dep:tokio-rustls", "dep:tokio-rustls-acme", "dep:rustls", "dep:rustls-pki-types"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
