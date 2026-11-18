@@ -5,11 +5,11 @@ use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use crate::modules::mstatic::{StaticModule, config::SslConfig};
+use crate::modules::mstatic::{StaticModuleInner, config::SslConfig};
 use tracing::{info, error};
 use tokio::io::AsyncWriteExt;
 
-impl StaticModule {
+impl StaticModuleInner {
     pub async fn start_raw_tcp_port(&self, port: u16, ssl: &Option<SslConfig>, path: &PathBuf, token: CancellationToken) {
         if let Some(ssl) = ssl {
             self.start_tls_raw_tcp_port(port, path, ssl, token).await;

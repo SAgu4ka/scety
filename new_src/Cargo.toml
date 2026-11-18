@@ -7,7 +7,7 @@ repository = "https://github.com/SAgu4ka/scety"
 
 [features]
 default = ["mstatic"]
-mstatic = ["dep:tokio-rustls", "dep:tokio-rustls-acme", "dep:rustls", "dep:rustls-pki-types"]
+mstatic = ["dep:tokio-rustls", "dep:tokio-rustls-acme", "dep:rustls", "dep:rustls-pki-types", "quinn", "h3", "h3-quinn", "http", "bytes"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -28,6 +28,11 @@ nix = { version = "0.32", features = ["process", "user", "fs", "signal"] }
 libc = "0.2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
+quinn = { version = "0.11", optional = true }
+h3 = { version = "0.0.8", optional = true }
+h3-quinn = { version = "0.0.10", optional = true }
+http = { version = "1", optional = true }
+bytes = { version = "1", optional = true }
 
 [build-dependencies]
 toml = "1"

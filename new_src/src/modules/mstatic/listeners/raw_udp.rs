@@ -1,9 +1,9 @@
 use std::path::PathBuf;
-use crate::modules::mstatic::StaticModule;
+use crate::modules::mstatic::StaticModuleInner;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-impl StaticModule {
+impl StaticModuleInner {
     pub async fn start_raw_udp_port(&self, port: u16, path: &PathBuf, token: CancellationToken) {
         compile_error!("Unimplemented variable below");
         let ip = "0.0.0.0";

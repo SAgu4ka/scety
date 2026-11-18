@@ -1,11 +1,10 @@
 use std::sync::Arc;
-
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use crate::{core::host_router::HostRouter, modules::mstatic::{StaticModule, config::{Files, HttpVersion, SslConfig}}};
+use crate::{core::host_router::HostRouter, modules::mstatic::{StaticModuleInner, config::{Files, HttpVersion, SslConfig}}};
 use tracing::{error, info, warn};
 
-impl StaticModule {
+impl StaticModuleInner {
     pub async fn start_tcp_port (&self, port: u16, ssl: &Option<SslConfig>, files: &Files, http_version: &HttpVersion, token: CancellationToken) {
         if ssl.is_some() {
             self.start_tcp_listener_with_tls(port, ssl, files, http_version, token);

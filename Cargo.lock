@@ -1718,9 +1718,14 @@ name = "scety-dev"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "clap",
+ "h3",
+ "h3-quinn",
+ "http",
  "libc",
  "nix 0.32.0",
+ "quinn",
  "rayon",
  "regex",
  "rustls",

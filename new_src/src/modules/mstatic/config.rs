@@ -18,7 +18,7 @@ pub struct SslConfig {
     pub acme_cache: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, Clone)]
 pub enum HttpVersion {
     #[serde(rename = "http/0.9", alias = "http09")]
     Http09,
@@ -30,7 +30,7 @@ pub enum HttpVersion {
 }
 
 #[serde_inline_default]
-#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, Clone)]
 pub struct RootDirConfig {
     pub path: PathBuf,
     #[serde_inline_default("index.html".to_string())]
@@ -38,14 +38,14 @@ pub struct RootDirConfig {
     pub fallback_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, Clone)]
 pub enum Files {
     SimpleRootDir(PathBuf),
     RootDir(RootDirConfig),
     Map(BTreeMap<String, PathBuf>),
 }
 
-#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, Clone)]
 #[serde(tag = "protocol", rename_all = "lowercase")]
 pub enum TransportProtocol {
     Tcp {
@@ -82,7 +82,7 @@ impl TransportProtocol {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Hash, PartialEq, Eq, Clone)]
 pub struct StaticConfig {
     pub name: String,
     pub host: String,
