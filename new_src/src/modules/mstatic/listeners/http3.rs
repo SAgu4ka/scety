@@ -1,14 +1,23 @@
-use std::{path::Path, sync::Arc};
+use crate::modules::mstatic::{
+    StaticModuleInner,
+    config::{Files, SslConfig},
+};
 use bytes::Bytes;
-use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
-use crate::modules::mstatic::{StaticModuleInner, config::{Files, SslConfig}};
+use quinn::{Endpoint, ServerConfig};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
-use quinn::{Endpoint, ServerConfig};
+use std::{path::Path, sync::Arc};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 impl StaticModuleInner {
-    pub async fn start_http3_port (&self, port: u16, ssl: &SslConfig, files: &Files, token: CancellationToken) {
+    pub async fn start_http3_port(
+        &self,
+        port: u16,
+        ssl: &SslConfig,
+        files: &Files,
+        token: CancellationToken,
+    ) {
         let Some((cert_path, key_path)) = ssl.cert.as_deref().zip(ssl.key.as_deref()) else {
             error!(port, "HTTP/3 requires certificate and key");
             return;
@@ -44,8 +53,7 @@ impl StaticModuleInner {
         transport.max_concurrent_bidi_streams(100u32.into());
         server_config.transport_config(Arc::new(transport));
 
-        compile_error!("Unimplemented variable below");
-        let ip = [0, 0, 0, 0];
+        let ip = self.get_ip();
 
         let endpoint = match Endpoint::server(server_config, (ip, port).into()) {
             Ok(endpoint) => endpoint,
@@ -54,7 +62,7 @@ impl StaticModuleInner {
                 return;
             }
         };
-        let files = Arc::new(files);
+        let files = Arc::new(files.clone());
         info!(port, "HTTP/3 static listener started");
 
         loop {
@@ -70,13 +78,13 @@ impl StaticModuleInner {
                         Err(error) => { warn!(%error, port, "HTTP/3 connection failed"); continue; }
                     };
                     let files = Arc::clone(&files);
-                    tokio::spawn(async move { self.serve_connection(connection, files).await; });
+                    tokio::spawn(async move { Self::serve_connection(connection, files).await; });
                 }
             }
         }
     }
 
-    async fn serve_connection(&self, connection: quinn::Connection, files: Arc<&Files>) {
+    async fn serve_connection(connection: quinn::Connection, files: Arc<Files>) {
         let quic = h3_quinn::Connection::new(connection);
         let mut server = match h3::server::builder().build(quic).await {
             Ok(server) => server,
@@ -93,7 +101,7 @@ impl StaticModuleInner {
                     continue;
                 }
             };
-            let Some((root, relative)) = self.resolve_file(&files, request.uri().path()) else {
+            let Some((root, relative)) = Self::resolve_file(&files, request.uri().path()) else {
                 let response = http::Response::builder().status(404).body(()).unwrap();
                 let _ = stream.send_response(response).await;
                 let _ = stream.finish().await;
@@ -112,14 +120,19 @@ impl StaticModuleInner {
                 (200, Bytes::from(body))
             });
             let response = http::Response::builder().status(status).body(()).unwrap();
-            if stream.send_response(response).await.is_ok() && request.method() != http::Method::HEAD {
+            if stream.send_response(response).await.is_ok()
+                && request.method() != http::Method::HEAD
+            {
                 let _ = stream.send_data(body).await;
             }
             let _ = stream.finish().await;
         }
     }
 
-    fn resolve_file<'a>(&self, files: &'a Files, request_path: &'a str) -> Option<(&'a Path, &'a str)> {
+    fn resolve_file<'a>(
+        files: &'a Files,
+        request_path: &'a str,
+    ) -> Option<(&'a Path, &'a str)> {
         match files {
             Files::SimpleRootDir(path) => {
                 let relative = request_path.trim_start_matches('/');

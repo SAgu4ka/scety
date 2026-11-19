@@ -1,32 +1,42 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::{collections::HashMap};
-use std::fs::read_to_string;
-use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use crate::modules::mstatic::read_configs::read_files;
 use crate::{
     DynResult,
     core::{ConfigValidationResult, Module},
     modules::mstatic::config::{StaticConfig, TransportProtocol, validate_static_configs},
 };
+use std::collections::HashMap;
+use std::fs::read_to_string;
+use std::net::IpAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 pub mod config;
 pub mod listeners;
+pub mod read_configs;
 
 pub struct StaticModule {
     inner: Arc<StaticModuleInner>,
-    configs: Vec<StaticConfig>
+    configs: Vec<StaticConfig>,
 }
 
-pub struct StaticModuleInner {}
+pub struct StaticModuleInner {
+    ip: IpAddr
+}
 
 impl StaticModuleInner {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(ip: IpAddr) -> Self {
+        Self {ip}
     }
 
-    pub async fn start_port(&self, port: u16, configs: Vec<StaticConfig>, token: CancellationToken) {
+    pub async fn start_port(
+        &self,
+        port: u16,
+        configs: Vec<StaticConfig>,
+        token: CancellationToken,
+    ) {
         if configs.len() == 1 {
             match &configs[0].mode {
                 TransportProtocol::RawTcp { ssl, path } => {
@@ -38,10 +48,14 @@ impl StaticModuleInner {
                     return;
                 }
                 TransportProtocol::Http3 { ssl, files } => {
-                    self.start_http3_port(port, ssl, files, token);
+                    self.start_http3_port(port, ssl, files, token).await;
                     return;
                 }
-                TransportProtocol::Tcp { ssl, http_version, files } => {
+                TransportProtocol::Tcp {
+                    ssl,
+                    http_version,
+                    files,
+                } => {
                     todo!();
                     self.start_tcp_port(port, ssl, files, http_version, token);
                     return;
@@ -51,19 +65,26 @@ impl StaticModuleInner {
             todo!()
         }
     }
+
+    pub fn get_ip (&self) -> IpAddr {
+        self.ip
+    }
 }
 
 impl StaticModule {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(StaticModuleInner::new()),
-            configs: Vec::new()
+            inner: Arc::new(StaticModuleInner::new([0, 0, 0, 0].into())),
+            configs: Vec::new(),
         }
     }
 
-    async fn prestart(&self, configs: Vec<PathBuf>) {
-        let mut content = Vec::new();
-        for file in configs {}
+    async fn prestart(&mut self, paths: Vec<PathBuf>) {
+        let contents = read_files(paths).unwrap();
+        for content in contents {
+            self.configs
+                .push(toml::from_slice(&content).expect("Failed parse toml file"));
+        }
     }
 
     async fn start(&self, token: CancellationToken) {
@@ -119,8 +140,8 @@ impl Module for StaticModule {
         'life0: 'async_trait,
         Self: 'async_trait,
     {
-        self.prestart(configs);
-        self.start(token);
-        todo!()
+        todo!();
+        // self.prestart(configs).await;
+        // self.start(token).await;
     }
 }

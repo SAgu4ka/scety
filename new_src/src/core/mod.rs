@@ -11,8 +11,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-pub mod scety_configs;
 pub mod host_router;
+pub mod scety_configs;
 
 /// The outcome of a module's configuration validation check.
 pub struct ConfigValidationResult {

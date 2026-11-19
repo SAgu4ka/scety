@@ -1,16 +1,15 @@
-use std::path::PathBuf;
 use crate::modules::mstatic::StaticModuleInner;
+use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 impl StaticModuleInner {
     pub async fn start_raw_udp_port(&self, port: u16, path: &PathBuf, token: CancellationToken) {
-        compile_error!("Unimplemented variable below");
-        let ip = "0.0.0.0";
+        let ip = self.get_ip();
         let socket = match tokio::net::UdpSocket::bind((ip, port)).await {
             Ok(socket) => socket,
             Err(error) => {
-                error!(%error, bind=ip, port, "Raw UDP static listener bind failed");
+                error!(%error, bind=%ip, port, "Raw UDP static listener bind failed");
                 return;
             }
         };
@@ -21,7 +20,8 @@ impl StaticModuleInner {
                 return;
             }
         };
-        self.start_raw_udp_socket(socket, content, token, path).await;
+        self.start_raw_udp_socket(socket, content, token, path)
+            .await;
     }
 
     async fn start_raw_udp_socket(

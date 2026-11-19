@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use tracing::warn;

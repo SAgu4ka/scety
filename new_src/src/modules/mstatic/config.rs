@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_inline_default::serde_inline_default;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    path::{Path, PathBuf},
+    collections::{BTreeMap, HashMap, HashSet}, net::IpAddr, path::{Path, PathBuf},
 };
 use tracing::{error, warn};
 
@@ -86,7 +85,7 @@ impl TransportProtocol {
 pub struct StaticConfig {
     pub name: String,
     pub host: String,
-    // pub bind_addr: String,
+    pub bind_addr: Option<IpAddr>,
     pub port: u16,
     pub mode: TransportProtocol,
 }
