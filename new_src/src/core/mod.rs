@@ -1,8 +1,9 @@
 use crate::DynResult;
+use crate::core::collision_checker::{BindAddress, CollisionChecker, Protocol};
 use async_trait::async_trait;
 use std::time::Duration;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     io::ErrorKind,
     path::PathBuf,
 };
@@ -13,15 +14,28 @@ use tracing::{error, info, warn};
 
 pub mod host_router;
 pub mod scety_configs;
+pub mod collision_checker;
+
+/// A single network binding a module intends to perform.
+///
+/// [`BindAddress::Wildcard`] means "all interfaces" (`0.0.0.0`/`::`) and
+/// conflicts with any concrete address on the same protocol and port.
+#[derive(Debug, Clone)]
+pub struct BindSpec {
+    pub addr:  BindAddress,
+    pub proto: Protocol,
+    pub port:  u16,
+}
 
 /// The outcome of a module's configuration validation check.
 pub struct ConfigValidationResult {
     /// Indicates whether the configuration is valid and the module is ready to start.
     pub success: bool,
 
-    /// A list of TCP/UDP ports that this module intends to bind or listen to.
-    /// Used by the Scety core to detect port collisions across different modules before launch.
-    pub ports: Vec<u16>,
+    /// Network bindings this module intends to bind or listen on.
+    /// Used by the Scety core to detect port collisions across modules before launch.
+    /// A wildcard binding conflicts with any concrete address on the same protocol/port.
+    pub binds: Vec<BindSpec>,
 
     /// A list of configuration file paths that contained syntax or validation errors (if any).
     pub problem_files: Option<Vec<PathBuf>>,
@@ -61,7 +75,7 @@ pub trait Module: Send + Sync + 'static {
 
 pub struct ScetyCore {
     modules: HashMap<String, Box<dyn Module>>,
-    ports: HashSet<u16>,
+    checker: CollisionChecker,
     all_configs: HashMap<String, Vec<PathBuf>>,
     yet_init: bool,
     yet_running: bool,
@@ -73,7 +87,7 @@ impl ScetyCore {
     pub fn new() -> Self {
         Self {
             modules: HashMap::new(),
-            ports: HashSet::new(),
+            checker: CollisionChecker::new(),
             all_configs: HashMap::new(),
             yet_init: false,
             yet_running: false,
@@ -101,7 +115,6 @@ impl ScetyCore {
         }
 
         let all_configs = scety_configs::get_all_configs()?;
-        let mut new_ports = HashSet::new();
 
         for (name, module) in new_modules.iter() {
             let empty = Vec::new();
@@ -122,20 +135,18 @@ impl ScetyCore {
                 .into());
             }
 
-            for port in result.ports {
-                if !new_ports.insert(port) {
+            for bind in &result.binds {
+                if !self.checker.try_add(bind.addr, bind.proto, bind.port) {
                     return Err(format!(
-                        "Port collision detected: Port {} is already in use.",
-                        port
-                    )
-                    .into());
+                        "Port collision: {:?} {:?}:{} (module '{}')",
+                        bind.addr, bind.proto, bind.port, name
+                    ).into());
                 }
             }
         }
 
         self.modules = new_modules;
         self.all_configs = all_configs;
-        self.ports = new_ports;
         self.yet_init = true;
         Ok(())
     }
@@ -174,10 +185,11 @@ impl ScetyCore {
             modules_count = modules_count,
             "All modules started successfully. Scety core is running."
         );
-        info!(
-            ports = ?self.ports,
-            "Ports in use by modules."
-        );
+        for (addr, protos) in self.checker.get_ports() {
+            for (proto, ports) in protos {
+                info!(?addr, proto = ?proto, ports = ?ports, "Bind");
+            }
+        }
         Ok(set)
     }
 
